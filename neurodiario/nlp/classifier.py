@@ -21,6 +21,9 @@ CATEGORY_KEYWORDS: Dict[str, List[str]] = {
     "deportes": [
         "béisbol", "fútbol", "jugador", "equipo", "torneo", "campeonato",
         "liga", "gol", "partido", "deporte", "atleta", "medalla",
+        "mlb", "beisbol", "baseball", "lidom", "clásico mundial",
+        "clasico mundial", "home run", "pitcher", "lanzador", "bateador",
+        "yankees", "dodgers", "medias rojas", "padres", "astros", "toronto",
     ],
     "salud": [
         "salud", "hospital", "médico", "enfermedad", "vacuna", "paciente",

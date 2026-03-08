@@ -44,6 +44,22 @@ SOURCES = [
         "language": "es",
         "active": True,
     },
+    {
+        "name": "Diario Libre Deportes",
+        "url": "https://www.diariolibre.com/rss/deportes",
+        "category": "deportes",
+        "country": "DO",
+        "language": "es",
+        "active": True,
+    },
+    {
+        "name": "Listin Deportes",
+        "url": "https://listindiario.com/rss/deportes",
+        "category": "deportes",
+        "country": "DO",
+        "language": "es",
+        "active": True,
+    },
 ]
 
 # Categorías válidas para clasificación
