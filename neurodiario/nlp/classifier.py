@@ -73,6 +73,19 @@ class ArticleClassifier:
             return self._classify_by_keywords(text, title)
         raise NotImplementedError(f"Método '{self.method}' no implementado aún")
 
+    def classify_article(self, title: str, content: str) -> Tuple[str, float]:
+        """
+        Clasifica un artículo dado su título y contenido.
+
+        Args:
+            title: Título del artículo.
+            content: Contenido o cuerpo del artículo.
+
+        Returns:
+            Tupla (categoría, confianza) donde confianza está en [0, 1].
+        """
+        return self.classify(text=content, title=title)
+
     def classify_batch(self, articles: List[Dict]) -> List[Dict]:
         """
         Clasifica una lista de artículos y añade 'category' y 'category_confidence'.

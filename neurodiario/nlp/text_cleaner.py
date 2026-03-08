@@ -5,9 +5,24 @@ Prepara el texto de los artículos para su análisis NLP posterior.
 
 import re
 import logging
-from typing import Optional
+import unicodedata
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Stopwords comunes en español
+SPANISH_STOPWORDS = {
+    "de", "la", "que", "el", "en", "y", "a", "los", "del", "se", "las",
+    "por", "un", "para", "con", "una", "su", "al", "lo", "como", "más",
+    "pero", "sus", "le", "ya", "o", "este", "sí", "porque", "esta", "entre",
+    "cuando", "muy", "sin", "sobre", "también", "me", "hasta", "hay", "donde",
+    "quien", "desde", "todo", "nos", "durante", "todos", "uno", "les", "ni",
+    "contra", "otros", "ese", "eso", "ante", "ellos", "e", "esto", "mí",
+    "antes", "algunos", "qué", "unos", "yo", "otro", "otras", "otra", "él",
+    "tanto", "esa", "estos", "mucho", "quienes", "nada", "muchos", "cual",
+    "sea", "poco", "ella", "estar", "haber", "estas", "estaba", "estamos",
+    "están", "era", "sido", "tiene", "han", "fue", "ser", "son", "hay",
+}
 
 # Patrones de limpieza
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -71,6 +86,59 @@ class TextCleaner:
             text = text.lower()
 
         return text
+
+    def clean_text(self, text: str) -> str:
+        """Alias de clean(). Limpia caracteres especiales y normaliza el texto."""
+        return self.clean(text)
+
+    def remove_stopwords(self, text: str) -> str:
+        """
+        Elimina stopwords (palabras comunes) del texto en español.
+
+        Args:
+            text: Texto limpio.
+
+        Returns:
+            Texto sin stopwords.
+        """
+        words = text.split()
+        filtered = [w for w in words if w.lower() not in SPANISH_STOPWORDS]
+        return " ".join(filtered)
+
+    def normalize_text(self, text: str) -> str:
+        """
+        Normaliza el texto para comparación: minúsculas, sin acentos, sin stopwords.
+
+        Args:
+            text: Texto a normalizar.
+
+        Returns:
+            Texto normalizado apto para comparaciones y búsquedas.
+        """
+        # Limpiar primero
+        text = self.clean(text)
+        # Convertir a minúsculas
+        text = text.lower()
+        # Eliminar acentos (NFD descompone, luego filtramos marcas diacríticas)
+        text = unicodedata.normalize("NFD", text)
+        text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+        # Eliminar stopwords
+        text = self.remove_stopwords(text)
+        return _WHITESPACE_RE.sub(" ", text).strip()
+
+    def get_summary(self, text: str, max_sentences: int = 3) -> str:
+        """
+        Extrae un resumen simple tomando las primeras oraciones del texto.
+
+        Args:
+            text: Texto del artículo.
+            max_sentences: Número máximo de oraciones a incluir.
+
+        Returns:
+            Resumen como cadena de texto.
+        """
+        sentences = self.extract_sentences(text)
+        return " ".join(sentences[:max_sentences])
 
     def clean_batch(self, texts: list) -> list:
         """

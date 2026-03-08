@@ -41,7 +41,14 @@ class RSSFetcher:
         """
         articles = []
         try:
-            feed = feedparser.parse(source["url"], request_headers={"User-Agent": "NeuroDiario/1.0"})
+            # MEJORA 3B: Pre-fetch con requests para aplicar timeout explícito
+            response = requests.get(
+                source["url"],
+                headers={"User-Agent": "NeuroDiario/1.0"},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
             if feed.bozo:
                 logger.warning(f"Feed con errores de parseo: {source['name']}")
 
@@ -154,7 +161,8 @@ class RSSFetcher:
             article = Article(
                 title=data.get("title", "Sin título"),
                 url=url,
-                summary=data.get("summary", ""),
+                summary=data.get("summary") or None,
+                raw_html=data.get("raw_html") or None,
                 raw_content=data.get("raw_content", ""),
                 word_count=data.get("word_count", 0),
                 published_at=data.get("published_at"),

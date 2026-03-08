@@ -103,7 +103,8 @@ def save_article(article_data: dict) -> bool:
             article = Article(
                 title=article_data.get("title", "Sin título"),
                 url=article_data["url"],
-                summary=article_data.get("summary", ""),
+                summary=article_data.get("summary") or None,
+                raw_html=article_data.get("raw_html") or None,
                 raw_content=article_data.get("raw_content", article_data.get("content", "")),
                 word_count=article_data.get("word_count", 0),
                 published_at=article_data.get("published_at"),
