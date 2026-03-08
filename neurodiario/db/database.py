@@ -168,6 +168,35 @@ def get_unprocessed_articles(limit: int = 100) -> list:
         return []
 
 
+def save_trend(topic: str, article_count: int, sources: list) -> bool:
+    """
+    Guarda una tendencia detectada en la BD.
+
+    Args:
+        topic: Nombre o keyword principal del tema.
+        article_count: Número de artículos del cluster.
+        sources: Lista de nombres de medios donde aparece el tema.
+
+    Returns:
+        True si se insertó correctamente, False en caso de error.
+    """
+    from .models import Trend
+
+    try:
+        with get_db() as db:
+            trend = Trend(
+                topic=topic,
+                article_count=article_count,
+                sources=sources,
+            )
+            db.add(trend)
+        logger.info(f"Tendencia guardada: '{topic}' ({article_count} artículos)")
+        return True
+    except Exception as e:
+        logger.error(f"Error guardando tendencia '{topic}': {e}")
+        return False
+
+
 def health_check() -> bool:
     """
     Verifica que la conexión a la base de datos esté funcionando.
