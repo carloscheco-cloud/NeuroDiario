@@ -65,3 +65,9 @@ FETCH_TIMEOUT = 30
 
 # Número máximo de artículos por fuente en cada ciclo
 MAX_ARTICLES_PER_SOURCE = 50
+
+# Intentos máximos ante fallos de red
+FETCH_RETRIES = 3
+
+# Alias dict para acceso rápido por clave corta (nombre_clave -> url del feed)
+RSS_SOURCES = {s["name"].lower().replace(" ", "_"): s["url"] for s in SOURCES}

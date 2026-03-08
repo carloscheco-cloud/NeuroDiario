@@ -110,20 +110,59 @@ class RSSFetcher:
         """
         Guarda artículos en la base de datos, evitando duplicados por URL.
 
+        Busca o crea la fila Source correspondiente a cada artículo y luego
+        inserta el artículo solo si su URL todavía no existe en la tabla.
+
         Args:
-            articles: Lista de artículos a guardar.
+            articles: Lista de artículos normalizados (salida de fetch_articles).
             db_session: Sesión activa de SQLAlchemy.
 
         Returns:
             Número de artículos nuevos insertados.
         """
-        # TODO: Implementar lógica de upsert usando db/models.py
-        # from neurodiario.db.models import Article
-        # saved = 0
-        # for data in articles:
-        #     if not db_session.query(Article).filter_by(url=data["url"]).first():
-        #         db_session.add(Article(**data))
-        #         saved += 1
-        # db_session.commit()
-        # return saved
-        raise NotImplementedError("save_to_db aún no está implementado")
+        from neurodiario.db.models import Article, Source
+
+        saved = 0
+        # Cache local para evitar una consulta por cada artículo del mismo medio
+        source_cache: Dict[str, int] = {}
+
+        for data in articles:
+            url = data.get("url", "").strip()
+            if not url:
+                continue
+
+            # Saltar si ya existe en BD
+            if db_session.query(Article.id).filter(Article.url == url).first():
+                continue
+
+            # Resolver source_id
+            source_name = data.get("source_name", "")
+            source_url = data.get("source_url", "")
+            if source_name not in source_cache:
+                source_row = db_session.query(Source).filter(Source.name == source_name).first()
+                if not source_row:
+                    source_row = Source(
+                        name=source_name,
+                        url=source_url,
+                        category=data.get("category", "general"),
+                        language=data.get("language", "es"),
+                    )
+                    db_session.add(source_row)
+                    db_session.flush()  # obtener el id sin commit
+                source_cache[source_name] = source_row.id
+
+            article = Article(
+                title=data.get("title", "Sin título"),
+                url=url,
+                summary=data.get("summary", ""),
+                raw_content=data.get("raw_content", ""),
+                word_count=data.get("word_count", 0),
+                published_at=data.get("published_at"),
+                source_id=source_cache.get(source_name),
+            )
+            db_session.add(article)
+            saved += 1
+
+        db_session.commit()
+        logger.info(f"Artículos nuevos guardados: {saved}")
+        return saved
