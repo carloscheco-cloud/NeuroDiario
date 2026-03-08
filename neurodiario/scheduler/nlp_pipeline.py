@@ -181,7 +181,12 @@ class NLPPipeline:
         # ------------------------------------------------------------------ #
         #  Módulo 4 — Detección de tendencias                                 #
         # ------------------------------------------------------------------ #
-        self._run_trend_detection()
+        trends = self._run_trend_detection()
+
+        # ------------------------------------------------------------------ #
+        #  Módulo 5 — Generación y publicación de artículos por tendencia     #
+        # ------------------------------------------------------------------ #
+        self._generate_and_publish(trends)
 
         return processed_count
 
@@ -281,6 +286,73 @@ class NLPPipeline:
                 print(f"Medios: {sources_str}")
 
         print("\n" + "=" * 40 + "\n")
+
+    def _generate_and_publish(self, trends: List[Dict]) -> None:
+        """
+        Módulo 5: Genera y publica un artículo por cada tendencia detectada.
+
+        Para cada tendencia verifica si ya se generó un artículo hoy para ese
+        tema. Si ya existe, lo salta para evitar duplicados en WordPress.
+
+        Args:
+            trends: Lista de tendencias retornadas por _run_trend_detection.
+        """
+        from neurodiario.db.database import get_db, get_generated_articles_by_topic_today
+        from neurodiario.db.models import Article
+        from neurodiario.generator.article_generator import ArticleGenerator
+        from neurodiario.config.settings import settings
+
+        if not trends:
+            logger.info("No hay tendencias para generar artículos.")
+            return
+
+        logger.info("=" * 60)
+        logger.info("GENERANDO ARTÍCULOS POR TENDENCIA")
+        logger.info("=" * 60)
+
+        # Obtener artículos procesados recientes como contexto para la generación
+        try:
+            with get_db() as db:
+                recent_orm = (
+                    db.query(Article)
+                    .filter(Article.processed == True)  # noqa: E712
+                    .order_by(Article.fetched_at.desc())
+                    .limit(50)
+                    .all()
+                )
+                article_dicts = [
+                    {
+                        "title": a.title or "",
+                        "url": a.url,
+                        "raw_content": a.clean_content or a.raw_content or "",
+                    }
+                    for a in recent_orm
+                ]
+        except Exception as exc:
+            logger.error(f"Error obteniendo artículos para generación: {exc}", exc_info=True)
+            return
+
+        generator = ArticleGenerator(api_key=settings.CLAUDE_API_KEY)
+
+        for trend in trends:
+            topic = trend.get("topic", "")
+
+            exists_today = get_generated_articles_by_topic_today(topic)
+
+            if exists_today:
+                logger.info(f"Saltando tendencia ya publicada hoy: {topic}")
+                continue
+
+            try:
+                logger.info(f"Generando artículo para tendencia: {topic}")
+                generator.create_article(trend, article_dicts)
+                logger.info(f"Artículo generado para tema: {topic}")
+            except Exception as exc:
+                logger.error(
+                    f"Error generando artículo para '{topic}': {exc}", exc_info=True
+                )
+
+        logger.info("=" * 60)
 
 
 def run_nlp_pipeline(batch_size: int = 50) -> int:
