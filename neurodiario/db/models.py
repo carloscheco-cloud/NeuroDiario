@@ -76,6 +76,21 @@ class Article(Base):
         return f"<Article(id={self.id}, title='{self.title[:50]}...')>"
 
 
+class Trend(Base):
+    """Representa una tendencia temática detectada por el Módulo 4."""
+
+    __tablename__ = "trends"
+
+    id = Column(Integer, primary_key=True, index=True)
+    topic = Column(String(500), nullable=False)
+    article_count = Column(Integer, default=0)
+    sources = Column(JSON, default=list)  # Lista de nombres de medios
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<Trend(id={self.id}, topic='{self.topic[:50]}', articles={self.article_count})>"
+
+
 class GeneratedArticle(Base):
     """Representa un artículo generado por Claude AI y publicado en WordPress."""
 

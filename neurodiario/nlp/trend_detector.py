@@ -80,6 +80,57 @@ class TrendDetector:
         category_counter: Counter = Counter(a.get("category", "general") for a in recent)
         return category_counter.most_common(self.top_n)
 
+    def detect_trends(self, clustered_topics: List[Dict]) -> List[Dict]:
+        """
+        Detecta tendencias a partir de clusters de artículos.
+
+        Un tema se considera tendencia si cumple:
+          - artículos >= 3
+          - medios distintos >= 2
+
+        Args:
+            clustered_topics: Salida de TopicClusterer.cluster_articles().
+                Cada elemento tiene 'topic_id', 'keywords', 'topic' y 'articles'.
+
+        Returns:
+            Lista de tendencias detectadas, ordenadas por número de artículos, cada una con:
+            - 'topic': nombre o keyword principal del tema
+            - 'article_count': número de artículos en el cluster
+            - 'sources': lista de nombres de medios (únicos)
+        """
+        trends = []
+        for cluster in clustered_topics:
+            articles = cluster.get("articles", [])
+            article_count = len(articles)
+
+            # Recopilar medios distintos presentes en el cluster
+            sources = sorted({
+                a.get("source_name") or a.get("source") or "Desconocido"
+                for a in articles
+            })
+            n_sources = len(sources)
+
+            topic = (
+                cluster.get("topic")
+                or (cluster.get("keywords") or [""])[0]
+                or "Sin tema"
+            )
+
+            if article_count >= 3 and n_sources >= 2:
+                trends.append({
+                    "topic": topic,
+                    "article_count": article_count,
+                    "sources": sources,
+                })
+                logger.info(
+                    f"Tendencia detectada: {topic} en {n_sources} medios "
+                    f"({article_count} artículos)"
+                )
+
+        trends.sort(key=lambda t: t["article_count"], reverse=True)
+        logger.info(f"Total de tendencias detectadas: {len(trends)}")
+        return trends
+
     def _filter_recent(self, articles: List[Dict]) -> List[Dict]:
         """Filtra artículos publicados dentro de la ventana de tiempo configurada."""
         cutoff = datetime.utcnow() - timedelta(hours=self.window_hours)

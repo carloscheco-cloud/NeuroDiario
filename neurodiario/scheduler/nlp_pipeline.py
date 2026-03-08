@@ -1,5 +1,5 @@
 """
-Pipeline NLP de NeuroDiario — Módulo 2.
+Pipeline NLP de NeuroDiario — Módulos 2 y 4.
 
 Orquesta el procesamiento de lenguaje natural sobre artículos ya ingestados:
   1. Obtiene artículos no procesados desde la BD.
@@ -7,6 +7,9 @@ Orquesta el procesamiento de lenguaje natural sobre artículos ya ingestados:
   3. Extrae entidades nombradas con EntityExtractor.
   4. Clasifica el artículo por tema con ArticleClassifier.
   5. Persiste los resultados en la BD y marca el artículo como procesado.
+  6. [Módulo 4] Agrupa artículos recientes en clusters temáticos (TopicClusterer).
+  7. [Módulo 4] Detecta tendencias entre múltiples medios (TrendDetector).
+  8. Guarda las tendencias en la BD y las muestra en consola.
 
 Uso directo:
     python -m neurodiario.scheduler.nlp_pipeline
@@ -15,7 +18,7 @@ Uso directo:
 
 import logging
 from datetime import datetime
-from typing import List
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,8 @@ class NLPPipeline:
         self._cleaner = None
         self._extractor = None
         self._classifier = None
+        self._clusterer = None
+        self._trend_detector = None
 
     # ------------------------------------------------------------------ #
     #  Carga perezosa de componentes NLP (evita importar spaCy al inicio) #
@@ -57,6 +62,20 @@ class NLPPipeline:
             from neurodiario.nlp.classifier import ArticleClassifier
             self._classifier = ArticleClassifier(method="keyword")
         return self._classifier
+
+    @property
+    def clusterer(self):
+        if self._clusterer is None:
+            from neurodiario.nlp.topic_cluster import TopicClusterer
+            self._clusterer = TopicClusterer()
+        return self._clusterer
+
+    @property
+    def trend_detector(self):
+        if self._trend_detector is None:
+            from neurodiario.nlp.trend_detector import TrendDetector
+            self._trend_detector = TrendDetector()
+        return self._trend_detector
 
     # ------------------------------------------------------------------ #
     #  Procesamiento de un artículo individual                            #
@@ -159,7 +178,109 @@ class NLPPipeline:
         logger.info(f"  Fallidos   : {len(articles) - processed_count}")
         logger.info("=" * 60)
 
+        # ------------------------------------------------------------------ #
+        #  Módulo 4 — Detección de tendencias                                 #
+        # ------------------------------------------------------------------ #
+        self._run_trend_detection()
+
         return processed_count
+
+    def _run_trend_detection(self) -> List[Dict]:
+        """
+        Módulo 4: Agrupa artículos recientes y detecta tendencias.
+
+        Obtiene los últimos artículos procesados, construye clusters temáticos
+        y filtra los que aparecen en múltiples medios con suficiente volumen.
+
+        Returns:
+            Lista de tendencias detectadas.
+        """
+        from neurodiario.db.database import get_db, save_trend
+        from neurodiario.db.models import Article
+        from sqlalchemy.orm import joinedload
+
+        logger.info("=" * 60)
+        logger.info("DETECTANDO TENDENCIAS")
+        logger.info("=" * 60)
+
+        # Obtener artículos recientes ya procesados, con su fuente cargada
+        try:
+            with get_db() as db:
+                recent_orm = (
+                    db.query(Article)
+                    .options(joinedload(Article.source))
+                    .filter(Article.processed == True)  # noqa: E712
+                    .order_by(Article.fetched_at.desc())
+                    .limit(200)
+                    .all()
+                )
+                # Convertir a dicts mientras la sesión está activa
+                article_dicts = [
+                    {
+                        "title": a.title or "",
+                        "content": a.clean_content or a.raw_content or "",
+                        "source_name": a.source.name if a.source else "Desconocido",
+                        "url": a.url,
+                    }
+                    for a in recent_orm
+                ]
+        except Exception as exc:
+            logger.error(f"Error obteniendo artículos para clustering: {exc}", exc_info=True)
+            return []
+
+        if not article_dicts:
+            logger.info("No hay artículos procesados disponibles para clustering.")
+            return []
+
+        logger.info(f"Artículos disponibles para clustering: {len(article_dicts)}")
+
+        # Paso 1: clustering temático
+        try:
+            clusters = self.clusterer.cluster_articles(article_dicts)
+        except Exception as exc:
+            logger.error(f"Error en clustering: {exc}", exc_info=True)
+            return []
+
+        if not clusters:
+            logger.info("No se formaron clusters.")
+            return []
+
+        # Paso 2: detectar tendencias
+        try:
+            trends = self.trend_detector.detect_trends(clusters)
+        except Exception as exc:
+            logger.error(f"Error en detección de tendencias: {exc}", exc_info=True)
+            return []
+
+        # Paso 3: guardar tendencias en BD
+        for trend in trends:
+            save_trend(
+                topic=trend["topic"],
+                article_count=trend["article_count"],
+                sources=trend["sources"],
+            )
+
+        # Paso 4: mostrar resultado en consola
+        self._display_trends(trends)
+        return trends
+
+    @staticmethod
+    def _display_trends(trends: List[Dict]) -> None:
+        """Muestra las tendencias detectadas en consola con formato claro."""
+        print("\n" + "=" * 40)
+        print("DETECTANDO TENDENCIAS")
+        print("=" * 40)
+
+        if not trends:
+            print("No se detectaron tendencias en este ciclo.")
+        else:
+            for trend in trends:
+                sources_str = ", ".join(trend["sources"])
+                print(f"\nTema: {trend['topic']}")
+                print(f"Artículos: {trend['article_count']}")
+                print(f"Medios: {sources_str}")
+
+        print("\n" + "=" * 40 + "\n")
 
 
 def run_nlp_pipeline(batch_size: int = 50) -> int:
