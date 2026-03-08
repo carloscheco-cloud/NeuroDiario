@@ -81,6 +81,92 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def save_article(article_data: dict) -> bool:
+    """
+    Guarda un artículo en la BD dentro de una sesión propia.
+
+    Args:
+        article_data: Dict con claves title, content/raw_content, source_id,
+                      url, published_at, word_count, summary.
+
+    Returns:
+        True si se insertó correctamente, False en caso de error o duplicado.
+    """
+    from .models import Article
+
+    try:
+        with get_db() as db:
+            if db.query(Article.id).filter(Article.url == article_data["url"]).first():
+                logger.debug(f"Artículo ya existe: {article_data['url']}")
+                return False
+
+            article = Article(
+                title=article_data.get("title", "Sin título"),
+                url=article_data["url"],
+                summary=article_data.get("summary", ""),
+                raw_content=article_data.get("raw_content", article_data.get("content", "")),
+                word_count=article_data.get("word_count", 0),
+                published_at=article_data.get("published_at"),
+                source_id=article_data.get("source_id"),
+            )
+            db.add(article)
+        logger.info(f"Artículo guardado: {article_data['url']}")
+        return True
+    except Exception as e:
+        logger.error(f"Error guardando artículo: {e}")
+        return False
+
+
+def article_exists(url: str) -> bool:
+    """
+    Verifica si un artículo ya existe en la BD por su URL.
+
+    Args:
+        url: URL exacta del artículo.
+
+    Returns:
+        True si ya está almacenado, False en caso contrario.
+    """
+    from .models import Article
+
+    try:
+        with get_db() as db:
+            return db.query(Article.id).filter(Article.url == url).first() is not None
+    except Exception as e:
+        logger.error(f"Error verificando existencia de artículo: {e}")
+        return False
+
+
+def get_unprocessed_articles(limit: int = 100) -> list:
+    """
+    Obtiene artículos que aún no han pasado por el módulo NLP.
+
+    Args:
+        limit: Número máximo de artículos a retornar.
+
+    Returns:
+        Lista de instancias Article con processed=False.
+    """
+    from .models import Article
+
+    try:
+        with get_db() as db:
+            articles = (
+                db.query(Article)
+                .filter(Article.processed == False)  # noqa: E712
+                .order_by(Article.fetched_at.asc())
+                .limit(limit)
+                .all()
+            )
+            # Expunge para poder usarlos fuera del contexto de sesión
+            for a in articles:
+                db.expunge(a)
+            return articles
+    except Exception as e:
+        logger.error(f"Error obteniendo artículos no procesados: {e}")
+        return []
+
+
 def health_check() -> bool:
     """
     Verifica que la conexión a la base de datos esté funcionando.
