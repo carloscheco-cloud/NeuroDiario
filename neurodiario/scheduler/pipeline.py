@@ -8,6 +8,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from tqdm import tqdm
+
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -160,3 +162,83 @@ class Pipeline:
         logger.info("Ejecutando pipeline completo en modo único...")
         self.run_ingestion()
         self.run_generation_and_publish()
+
+
+def run_ingestion_pipeline():
+    """
+    Ejecuta pipeline completo de ingesta.
+
+    Flujo:
+    1) Fetch RSS de todas las fuentes
+    2) Parse de cada artículo
+    3) Verificar duplicados
+    4) Guardar en BD
+    """
+    from neurodiario.ingestion.rss_fetcher import RSSFetcher
+    from neurodiario.ingestion.article_parser import ArticleParser
+    from neurodiario.ingestion.deduplicator import is_duplicate
+    from neurodiario.db.database import get_db, save_article, init_db
+
+    logger.info("=" * 60)
+    logger.info("INICIANDO PIPELINE DE INGESTA")
+    logger.info("=" * 60)
+
+    # Inicializar BD
+    init_db()
+
+    # 1) FETCH RSS
+    logger.info("PASO 1: Obteniendo feeds RSS...")
+    fetcher = RSSFetcher()
+    rss_articles = fetcher.fetch_articles()
+
+    if not rss_articles:
+        logger.warning("No articles found in RSS feeds")
+        return
+
+    logger.info(f"✓ {len(rss_articles)} artículos encontrados en RSS")
+
+    # 2) PARSE Y DEDUPLICACIÓN
+    logger.info("PASO 2: Parseando artículos completos...")
+    parser = ArticleParser()
+    saved_count = 0
+    skipped_count = 0
+
+    with get_db() as db_session:
+        for rss_article in tqdm(rss_articles, desc="Procesando"):
+            url = rss_article.get('url')
+
+            if not url:
+                logger.warning(f"Artículo sin URL: {rss_article.get('title')}")
+                continue
+
+            # 3) VERIFICAR DUPLICADO
+            if is_duplicate(url, rss_article.get('title', ''), db_session):
+                logger.debug(f"Duplicado saltado: {url}")
+                skipped_count += 1
+                continue
+
+            # 4) PARSE CONTENIDO COMPLETO
+            parsed = parser.parse(rss_article)
+
+            if not parsed.get('raw_content'):
+                logger.warning(f"No se pudo parsear: {url}")
+                continue
+
+            # 5) GUARDAR EN BD
+            if save_article(parsed):
+                saved_count += 1
+                logger.info(f"✓ Guardado: {parsed['title'][:60]}")
+
+    logger.info("=" * 60)
+    logger.info("PIPELINE COMPLETADO")
+    logger.info(f"  Guardados: {saved_count}")
+    logger.info(f"  Duplicados: {skipped_count}")
+    logger.info("=" * 60)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    run_ingestion_pipeline()

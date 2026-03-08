@@ -68,16 +68,27 @@ Copia `.env.example` a `.env` y completa los valores:
 
 ## Uso
 
-### Ejecutar el pipeline completo una vez
+### Pipeline de ingesta (ejecución directa)
 
-```python
-from neurodiario.scheduler.pipeline import Pipeline
-
-pipeline = Pipeline()
-pipeline.run_once()
+```bash
+python -m neurodiario.scheduler.pipeline
 ```
 
-### Iniciar el scheduler continuo
+Resultado esperado:
+- Artículos descargados desde feeds RSS dominicanos
+- Contenido completo parseado y limpio
+- Duplicados eliminados automáticamente
+- Todo guardado en base de datos con resumen final
+
+### Ejecutar el pipeline completo una vez (API Python)
+
+```python
+from neurodiario.scheduler.pipeline import run_ingestion_pipeline
+
+run_ingestion_pipeline()
+```
+
+### Iniciar el scheduler continuo (APScheduler)
 
 ```python
 from neurodiario.scheduler.pipeline import Pipeline
@@ -118,7 +129,8 @@ neurodiario/
 │   ├── text_cleaner.py
 │   ├── entity_extractor.py
 │   ├── classifier.py
-│   └── trend_detector.py
+│   ├── trend_detector.py
+│   └── topic_cluster.py
 ├── generator/          # Generación de artículos con Claude AI
 │   └── article_generator.py
 ├── publisher/          # Publicación en WordPress

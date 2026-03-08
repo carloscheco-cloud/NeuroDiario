@@ -40,6 +40,8 @@ class Settings:
     FETCH_INTERVAL_HOURS: int = int(os.getenv("FETCH_INTERVAL_HOURS", "2"))
     MAX_ARTICLES_PER_CYCLE: int = int(os.getenv("MAX_ARTICLES_PER_CYCLE", "100"))
     TREND_WINDOW_HOURS: int = int(os.getenv("TREND_WINDOW_HOURS", "24"))
+    INGESTION_INTERVAL_MINUTES: int = int(os.getenv("INGESTION_INTERVAL_MINUTES", "15"))
+    NLP_INTERVAL_MINUTES: int = int(os.getenv("NLP_INTERVAL_MINUTES", "20"))
 
     # ── NLP ────────────────────────────────────────────────────────────────────
     SPACY_MODEL: str = os.getenv("SPACY_MODEL", "es_core_news_lg")
