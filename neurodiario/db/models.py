@@ -98,7 +98,10 @@ class GeneratedArticle(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(500), nullable=False)
+    summary = Column(Text, nullable=True)          # Resumen breve (2 frases)
     content = Column(Text, nullable=False)
+    topic = Column(String(500), nullable=True)     # Tendencia que originó el artículo
+    sources = Column(JSON, default=list)           # URLs de artículos fuente
     article_type = Column(String(50), default="summary")  # summary, analysis, digest
     category = Column(String(100), default="general")
     tags = Column(JSON, default=list)

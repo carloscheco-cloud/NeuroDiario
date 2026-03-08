@@ -5,6 +5,7 @@ basados en las noticias recolectadas.
 """
 
 import logging
+import re
 from typing import Dict, List, Optional
 
 import anthropic
@@ -20,6 +21,33 @@ Tu tarea es generar artículos periodísticos en español, claros, objetivos y b
 Usa un tono profesional, evita sensacionalismo y cita las fuentes cuando corresponda.
 Los artículos deben estar optimizados para SEO y WordPress."""
 
+# Prompt base para create_article — estructura fija
+ARTICLE_PROMPT_TEMPLATE = """Usa la siguiente información de varios medios para generar un artículo informativo neutral sobre el tema: '{topic}'.
+
+INSTRUCCIONES OBLIGATORIAS:
+- Máximo 600 palabras en total
+- Tono neutral y objetivo, sin sensacionalismo
+- Cita las fuentes originales en el texto cuando sea posible
+- Estructura el artículo usando exactamente estas secciones:
+
+## TÍTULO
+[Un título claro, informativo y conciso — una sola línea]
+
+## RESUMEN
+[Exactamente dos frases que sinteticen lo más importante del artículo]
+
+## CONTEXTO
+[Antecedentes y contexto necesario para entender el tema]
+
+## DETALLE
+[Información detallada, hechos concretos y datos relevantes de las fuentes]
+
+## ANÁLISIS
+[Implicaciones del tema y perspectiva para los lectores dominicanos]
+
+FUENTES DE NOTICIAS:
+{sources_text}"""
+
 
 class ArticleGenerator:
     """Genera artículos periodísticos usando la API de Claude."""
@@ -32,6 +60,77 @@ class ArticleGenerator:
         """
         self.model = model
         self.client = anthropic.Anthropic(api_key=api_key)
+
+    # ------------------------------------------------------------------ #
+    #  Módulo 5 — Función principal                                        #
+    # ------------------------------------------------------------------ #
+
+    def create_article(self, trend: Dict, articles: List[Dict]) -> Dict:
+        """
+        Genera un artículo estructurado a partir de una tendencia y sus artículos fuente.
+
+        Entrada:
+            trend:    Dict con 'topic', 'article_count', 'sources'.
+            articles: Lista de artículos fuente (dicts con 'title', 'url', 'content').
+
+        Salida:
+            {
+                'title':   str  — título del artículo,
+                'summary': str  — resumen de dos frases,
+                'content': str  — cuerpo completo (Contexto + Detalle + Análisis),
+                'sources': list — URLs de los artículos fuente usados,
+            }
+        """
+        topic = trend.get("topic", "")
+        sources_text = self._format_sources(articles)
+
+        prompt = ARTICLE_PROMPT_TEMPLATE.format(
+            topic=topic,
+            sources_text=sources_text,
+        )
+
+        logger.info(f"Generando artículo para tendencia: '{topic}'")
+        raw_content = self._call_api(prompt, max_tokens=1200)
+
+        result = self._parse_article_response(raw_content, articles)
+        logger.info(f"Artículo generado: {result['title']}")
+        return result
+
+    def _parse_article_response(self, raw_content: str, articles: List[Dict]) -> Dict:
+        """
+        Parsea la respuesta estructurada de Claude y extrae cada sección.
+
+        Returns:
+            Dict con title, summary, content, sources.
+        """
+        def _extract_section(text: str, section_name: str) -> str:
+            pattern = rf"##\s*{re.escape(section_name)}\s*\n(.*?)(?=\n##\s|\Z)"
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            return match.group(1).strip() if match else ""
+
+        title = _extract_section(raw_content, "TÍTULO").lstrip("#").strip()
+        summary = _extract_section(raw_content, "RESUMEN")
+
+        # Cuerpo: Contexto + Detalle + Análisis
+        body_parts = []
+        for section in ["CONTEXTO", "DETALLE", "ANÁLISIS"]:
+            text = _extract_section(raw_content, section)
+            if text:
+                body_parts.append(f"## {section.capitalize()}\n\n{text}")
+        content = "\n\n".join(body_parts) if body_parts else raw_content
+
+        sources = [a.get("url", "") for a in articles if a.get("url")]
+
+        return {
+            "title": title or "Sin título",
+            "summary": summary,
+            "content": content,
+            "sources": sources,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Métodos existentes                                                  #
+    # ------------------------------------------------------------------ #
 
     def generate_summary(self, articles: List[Dict], topic: str) -> str:
         """
@@ -124,6 +223,6 @@ class ArticleGenerator:
             parts.append(
                 f"[Fuente {i}] {article.get('title', 'Sin título')}\n"
                 f"URL: {article.get('url', '')}\n"
-                f"Contenido: {article.get('raw_content', '')[:800]}..."
+                f"Contenido: {article.get('raw_content', article.get('content', ''))[:800]}..."
             )
         return "\n\n".join(parts)

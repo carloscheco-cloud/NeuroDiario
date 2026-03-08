@@ -1,5 +1,5 @@
 """
-Pipeline NLP de NeuroDiario — Módulos 2 y 4.
+Pipeline NLP de NeuroDiario — Módulos 2, 4 y 5.
 
 Orquesta el procesamiento de lenguaje natural sobre artículos ya ingestados:
   1. Obtiene artículos no procesados desde la BD.
@@ -10,6 +10,8 @@ Orquesta el procesamiento de lenguaje natural sobre artículos ya ingestados:
   6. [Módulo 4] Agrupa artículos recientes en clusters temáticos (TopicClusterer).
   7. [Módulo 4] Detecta tendencias entre múltiples medios (TrendDetector).
   8. Guarda las tendencias en la BD y las muestra en consola.
+  9. [Módulo 5] Genera un artículo por cada tendencia usando Claude AI.
+ 10. Guarda los artículos generados como draft en la BD.
 
 Uso directo:
     python -m neurodiario.scheduler.nlp_pipeline
@@ -37,6 +39,7 @@ class NLPPipeline:
         self._classifier = None
         self._clusterer = None
         self._trend_detector = None
+        self._generator = None
 
     # ------------------------------------------------------------------ #
     #  Carga perezosa de componentes NLP (evita importar spaCy al inicio) #
@@ -76,6 +79,13 @@ class NLPPipeline:
             from neurodiario.nlp.trend_detector import TrendDetector
             self._trend_detector = TrendDetector()
         return self._trend_detector
+
+    @property
+    def generator(self):
+        if self._generator is None:
+            from neurodiario.generator.article_generator import ArticleGenerator
+            self._generator = ArticleGenerator()
+        return self._generator
 
     # ------------------------------------------------------------------ #
     #  Procesamiento de un artículo individual                            #
@@ -181,7 +191,12 @@ class NLPPipeline:
         # ------------------------------------------------------------------ #
         #  Módulo 4 — Detección de tendencias                                 #
         # ------------------------------------------------------------------ #
-        self._run_trend_detection()
+        trends_with_articles = self._run_trend_detection()
+
+        # ------------------------------------------------------------------ #
+        #  Módulo 5 — Generación de artículos                                 #
+        # ------------------------------------------------------------------ #
+        self._run_article_generation(trends_with_articles)
 
         return processed_count
 
@@ -193,7 +208,8 @@ class NLPPipeline:
         y filtra los que aparecen en múltiples medios con suficiente volumen.
 
         Returns:
-            Lista de tendencias detectadas.
+            Lista de tendencias detectadas. Cada tendencia incluye además la
+            clave 'articles' con los dicts de artículos que forman el cluster.
         """
         from neurodiario.db.database import get_db, save_trend
         from neurodiario.db.models import Article
@@ -260,9 +276,76 @@ class NLPPipeline:
                 sources=trend["sources"],
             )
 
-        # Paso 4: mostrar resultado en consola
+        # Paso 4: enriquecer cada tendencia con sus artículos fuente
+        # Construimos un índice topic → artículos del cluster
+        cluster_by_topic = {c["topic"]: c.get("articles", []) for c in clusters}
+        for trend in trends:
+            trend["articles"] = cluster_by_topic.get(trend["topic"], [])
+
+        # Paso 5: mostrar resultado en consola
         self._display_trends(trends)
         return trends
+
+    # ------------------------------------------------------------------ #
+    #  Módulo 5 — Generación de artículos                                 #
+    # ------------------------------------------------------------------ #
+
+    def _run_article_generation(self, trends: List[Dict]) -> None:
+        """
+        Módulo 5: Genera un artículo por cada tendencia detectada y lo
+        guarda como draft en la base de datos.
+
+        Args:
+            trends: Lista de tendencias (cada una puede incluir 'articles').
+        """
+        from neurodiario.db.database import save_generated_article
+
+        logger.info("=" * 60)
+        logger.info("GENERANDO ARTÍCULOS")
+        logger.info("=" * 60)
+
+        if not trends:
+            logger.info("No hay tendencias para generar artículos.")
+            return
+
+        generated_count = 0
+
+        for trend in trends:
+            topic = trend.get("topic", "")
+            articles = trend.get("articles", [])
+
+            if not articles:
+                logger.warning(f"Tendencia '{topic}' sin artículos fuente, omitiendo.")
+                continue
+
+            try:
+                article_data = self.generator.create_article(trend, articles)
+
+                save_generated_article({
+                    "title": article_data["title"],
+                    "summary": article_data["summary"],
+                    "content": article_data["content"],
+                    "topic": topic,
+                    "sources": article_data["sources"],
+                    "status": "draft",
+                    "article_type": "summary",
+                    "category": trend.get("category", "general"),
+                })
+
+                generated_count += 1
+                logger.info(f"  ✓ Artículo generado: {article_data['title']}")
+
+            except Exception as e:
+                logger.error(
+                    f"  ✗ Error generando artículo para '{topic}': {e}",
+                    exc_info=True,
+                )
+
+        logger.info("=" * 60)
+        logger.info("GENERACIÓN DE ARTÍCULOS COMPLETADA")
+        logger.info(f"  Generados : {generated_count}")
+        logger.info(f"  Fallidos  : {len(trends) - generated_count}")
+        logger.info("=" * 60)
 
     @staticmethod
     def _display_trends(trends: List[Dict]) -> None:

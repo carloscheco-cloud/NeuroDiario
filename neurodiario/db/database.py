@@ -5,7 +5,7 @@ Configura SQLAlchemy con PostgreSQL y provee sesiones de BD.
 
 import logging
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -195,6 +195,55 @@ def save_trend(topic: str, article_count: int, sources: list) -> bool:
     except Exception as e:
         logger.error(f"Error guardando tendencia '{topic}': {e}")
         return False
+
+
+def save_generated_article(article_data: dict) -> Optional[int]:
+    """
+    Guarda un artículo generado por Claude en la base de datos.
+
+    Args:
+        article_data: Dict con las claves:
+            title     (str)  — título del artículo,
+            summary   (str)  — resumen breve (2 frases),
+            content   (str)  — cuerpo completo del artículo,
+            topic     (str)  — tendencia que originó el artículo,
+            sources   (list) — URLs de artículos fuente,
+            status    (str)  — estado inicial (por defecto "draft"),
+            category  (str)  — categoría temática (por defecto "general"),
+            model_used (str) — modelo Claude utilizado,
+            source_article_id (int|None) — FK a Article si aplica.
+
+    Returns:
+        ID del registro guardado, o None si ocurrió un error.
+    """
+    from .models import GeneratedArticle
+
+    try:
+        with get_db() as db:
+            gen_article = GeneratedArticle(
+                title=article_data.get("title", "Sin título"),
+                summary=article_data.get("summary", ""),
+                content=article_data.get("content", ""),
+                topic=article_data.get("topic", ""),
+                sources=article_data.get("sources", []),
+                status=article_data.get("status", "draft"),
+                article_type=article_data.get("article_type", "summary"),
+                category=article_data.get("category", "general"),
+                model_used=article_data.get("model_used", "claude-opus-4-6"),
+                source_article_id=article_data.get("source_article_id"),
+            )
+            db.add(gen_article)
+            db.flush()
+            article_id = gen_article.id
+
+        logger.info(
+            f"Artículo generado guardado: ID {article_id} — "
+            f"'{article_data.get('title', '')[:60]}'"
+        )
+        return article_id
+    except Exception as e:
+        logger.error(f"Error guardando artículo generado: {e}")
+        return None
 
 
 def health_check() -> bool:
