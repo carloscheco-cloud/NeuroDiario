@@ -197,6 +197,41 @@ def save_trend(topic: str, article_count: int, sources: list) -> bool:
         return False
 
 
+def get_generated_articles_by_topic_today(topic: str) -> bool:
+    """
+    Verifica si ya se generó un artículo para el tema dado en el día de hoy.
+
+    Args:
+        topic: Nombre o keyword del tema a verificar.
+
+    Returns:
+        True si ya existe un artículo generado hoy para ese tema, False en caso contrario.
+    """
+    from .models import GeneratedArticle
+    from datetime import date, datetime as dt
+    from sqlalchemy import cast, String
+
+    today_start = dt.combine(date.today(), dt.min.time())
+    today_end = dt.combine(date.today(), dt.max.time())
+
+    try:
+        with get_db() as db:
+            exists = (
+                db.query(GeneratedArticle.id)
+                .filter(
+                    GeneratedArticle.created_at >= today_start,
+                    GeneratedArticle.created_at <= today_end,
+                    cast(GeneratedArticle.tags, String).like(f'%"{topic}"%'),
+                )
+                .first()
+                is not None
+            )
+        return exists
+    except Exception as e:
+        logger.error(f"Error verificando artículo generado para '{topic}' hoy: {e}")
+        return False
+
+
 def health_check() -> bool:
     """
     Verifica que la conexión a la base de datos esté funcionando.
