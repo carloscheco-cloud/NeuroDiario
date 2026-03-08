@@ -1,5 +1,5 @@
 """
-Pipeline NLP de NeuroDiario — Módulos 2 y 4.
+Pipeline NLP de NeuroDiario — Módulos 2, 4, 5 y 6.
 
 Orquesta el procesamiento de lenguaje natural sobre artículos ya ingestados:
   1. Obtiene artículos no procesados desde la BD.
@@ -10,6 +10,8 @@ Orquesta el procesamiento de lenguaje natural sobre artículos ya ingestados:
   6. [Módulo 4] Agrupa artículos recientes en clusters temáticos (TopicClusterer).
   7. [Módulo 4] Detecta tendencias entre múltiples medios (TrendDetector).
   8. Guarda las tendencias en la BD y las muestra en consola.
+  9. [Módulo 5] Genera artículos periodísticos con ArticleGenerator (Claude AI).
+ 10. [Módulo 6] Publica los artículos generados en WordPress como borradores.
 
 Uso directo:
     python -m neurodiario.scheduler.nlp_pipeline
@@ -262,7 +264,84 @@ class NLPPipeline:
 
         # Paso 4: mostrar resultado en consola
         self._display_trends(trends)
+
+        # Paso 5 y 6: generar artículos y publicarlos en WordPress
+        if trends:
+            self._generate_and_publish(trends, article_dicts)
+
         return trends
+
+    def _generate_and_publish(self, trends: List[Dict], article_dicts: List[Dict]) -> None:
+        """
+        Módulos 5 y 6: genera artículos con Claude AI y los publica en WordPress.
+
+        Para cada tendencia detectada:
+          - Genera un artículo periodístico con ArticleGenerator.
+          - Lo publica en WordPress como borrador vía WordPressPublisher.
+          - Guarda el artículo y su WordPress post ID en la BD.
+
+        Args:
+            trends:       Lista de tendencias devuelta por TrendDetector.
+            article_dicts: Artículos en memoria disponibles para generar contenido.
+        """
+        from neurodiario.config.settings import settings
+        from neurodiario.db.database import get_db
+        from neurodiario.db.models import GeneratedArticle
+        from neurodiario.generator.article_generator import ArticleGenerator
+        from neurodiario.publisher.wordpress_publisher import WordPressPublisher
+
+        logger.info("=" * 60)
+        logger.info("GENERANDO Y PUBLICANDO ARTÍCULOS EN WORDPRESS")
+        logger.info("=" * 60)
+
+        try:
+            generator = ArticleGenerator(api_key=settings.CLAUDE_API_KEY or None)
+        except Exception as exc:
+            logger.error(f"No se pudo inicializar ArticleGenerator: {exc}")
+            return
+
+        publisher = WordPressPublisher()
+
+        for trend in trends:
+            topic = trend.get("topic", "")
+            trend_sources = set(trend.get("sources", []))
+
+            # Filtrar artículos relacionados con esta tendencia por fuente
+            related = [
+                a for a in article_dicts
+                if a.get("source_name") in trend_sources
+            ] or article_dicts[:5]
+
+            # Generar artículo con Claude
+            try:
+                article = generator.create_article(trend=trend, articles=related)
+            except Exception as exc:
+                logger.error(f"Error generando artículo para '{topic}': {exc}")
+                continue
+
+            # Publicar en WordPress como borrador
+            post_id = publisher.create_post(article)
+
+            # Persistir en base de datos
+            try:
+                with get_db() as db:
+                    generated = GeneratedArticle(
+                        title=article.get("title", "Sin título"),
+                        content=article.get("content", ""),
+                        article_type="summary",
+                        category=trend.get("category", "general"),
+                        tags=list(trend_sources),
+                        status="draft",
+                        wordpress_post_id=post_id,
+                        model_used=generator.model,
+                    )
+                    db.add(generated)
+            except Exception as exc:
+                logger.error(f"Error guardando GeneratedArticle en BD: {exc}")
+
+        logger.info("=" * 60)
+        logger.info("PUBLICACIÓN EN WORDPRESS COMPLETADA")
+        logger.info("=" * 60)
 
     @staticmethod
     def _display_trends(trends: List[Dict]) -> None:

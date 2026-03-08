@@ -1,119 +1,159 @@
 """
-Módulo de publicación en WordPress.
-Publica los artículos generados en un sitio WordPress vía XML-RPC.
+Módulo de publicación en WordPress — Módulo 6.
+Publica los artículos generados en un sitio WordPress vía REST API (wp-json).
+Usa autenticación básica (usuario + contraseña de aplicación).
 """
 
 import logging
-from datetime import datetime
 from typing import Dict, List, Optional
+
+import requests
+from requests.auth import HTTPBasicAuth
+
+from neurodiario.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# Endpoint de la API REST de WordPress para posts
+WP_API_POSTS = "/wp-json/wp/v2/posts"
+
 
 class WordPressPublisher:
-    """Publica artículos en WordPress usando la API XML-RPC."""
+    """Publica artículos en WordPress usando la API REST con autenticación básica."""
 
-    def __init__(self, url: str, username: str, password: str):
+    def __init__(
+        self,
+        url: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+    ):
         """
-        Args:
-            url: URL del sitio WordPress (ej: https://neurodiario.com).
-            username: Nombre de usuario de WordPress con permisos de publicación.
-            password: Contraseña del usuario.
-        """
-        self.url = url.rstrip("/")
-        self.username = username
-        self.password = password
-        self._client = None
-
-    @property
-    def client(self):
-        """Inicializa el cliente XML-RPC de forma perezosa."""
-        if self._client is None:
-            try:
-                from wordpress_xmlrpc import Client
-                self._client = Client(
-                    f"{self.url}/xmlrpc.php",
-                    self.username,
-                    self.password,
-                )
-                logger.info(f"Conectado a WordPress en {self.url}")
-            except Exception as e:
-                logger.error(f"Error conectando a WordPress: {e}")
-                raise
-        return self._client
-
-    def publish(self, article: Dict) -> Optional[int]:
-        """
-        Publica un artículo en WordPress como borrador o publicado.
+        Lee las credenciales desde los parámetros o, si no se proporcionan,
+        desde las variables de entorno WORDPRESS_URL / WORDPRESS_USER / WORDPRESS_PASSWORD.
 
         Args:
-            article: Diccionario con los campos del artículo:
-                     - title (str): Título del artículo.
-                     - content (str): Contenido HTML o texto plano.
-                     - categories (List[str]): Categorías de WordPress.
-                     - tags (List[str]): Etiquetas del artículo.
-                     - status (str): 'publish', 'draft' o 'private'.
+            url:      URL base del sitio WordPress (ej: https://neurodiario.com).
+            username: Usuario de WordPress con permisos de publicación.
+            password: Contraseña o Application Password del usuario.
+        """
+        self.url = (url or settings.WORDPRESS_URL).rstrip("/")
+        self.username = username or settings.WORDPRESS_USER
+        self.password = password or settings.WORDPRESS_PASSWORD
+        self._auth = HTTPBasicAuth(self.username, self.password)
+
+    # ------------------------------------------------------------------ #
+    #  Formateo del contenido                                              #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _build_content(article: Dict) -> str:
+        """
+        Construye el cuerpo HTML del post a partir de los campos del artículo.
+
+        Formato resultante:
+            <h2>Resumen</h2>
+            <p>[resumen]</p>
+
+            <h2>Artículo</h2>
+            <p>[contenido]</p>
+
+            <h2>Fuentes</h2>
+            <ul>
+              <li>medio 1</li>
+              <li>medio 2</li>
+            </ul>
+
+        Args:
+            article: Dict con title, summary, content y sources.
 
         Returns:
-            ID del post creado en WordPress, o None si falló.
+            Cadena HTML lista para enviar a WordPress.
         """
+        summary = article.get("summary", "").strip()
+        content = article.get("content", "").strip()
+        sources: List[str] = article.get("sources", [])
+
+        parts: List[str] = []
+
+        if summary:
+            parts.append(f"<h2>Resumen</h2>\n<p>{summary}</p>")
+
+        if content:
+            parts.append(f"<h2>Artículo</h2>\n<p>{content}</p>")
+
+        if sources:
+            items = "\n".join(f"  <li>{src}</li>" for src in sources if src)
+            parts.append(f"<h2>Fuentes</h2>\n<ul>\n{items}\n</ul>")
+
+        return "\n\n".join(parts)
+
+    # ------------------------------------------------------------------ #
+    #  Publicación principal                                               #
+    # ------------------------------------------------------------------ #
+
+    def create_post(self, article: Dict) -> Optional[int]:
+        """
+        Publica un artículo en WordPress como borrador (draft).
+
+        Args:
+            article: Diccionario generado por ArticleGenerator.create_article() con los campos:
+                     - title   (str):       Título del artículo.
+                     - summary (str):       Resumen breve.
+                     - content (str):       Cuerpo del artículo.
+                     - sources (List[str]): URLs de las fuentes utilizadas.
+
+        Returns:
+            ID del post creado en WordPress, o None si la publicación falló.
+        """
+        title = article.get("title", "Sin título")
+        html_content = self._build_content(article)
+
+        payload = {
+            "title": title,
+            "content": html_content,
+            "status": "draft",
+        }
+
+        endpoint = f"{self.url}{WP_API_POSTS}"
+
         try:
-            from wordpress_xmlrpc import WordPressPost
-            from wordpress_xmlrpc.methods.posts import NewPost
+            response = requests.post(
+                endpoint,
+                json=payload,
+                auth=self._auth,
+                timeout=30,
+            )
+            response.raise_for_status()
+            post_id = response.json().get("id")
+            logger.info(f"Artículo enviado a WordPress: {title}")
+            return int(post_id) if post_id is not None else None
 
-            post = WordPressPost()
-            post.title = article.get("title", "Sin título")
-            post.content = article.get("content", "")
-            post.post_status = article.get("status", "draft")
-            post.terms_names = {
-                "category": article.get("categories", ["General"]),
-                "post_tag": article.get("tags", []),
-            }
+        except requests.exceptions.HTTPError as e:
+            logger.error(
+                f"Error HTTP al publicar '{title}' en WordPress "
+                f"({response.status_code}): {e}"
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error de red al publicar '{title}' en WordPress: {e}")
 
-            post_id = self.client.call(NewPost(post))
-            logger.info(f"Artículo publicado con ID {post_id}: {post.title}")
-            return int(post_id)
+        return None
 
-        except Exception as e:
-            logger.error(f"Error publicando artículo '{article.get('title')}': {e}")
-            return None
+    # ------------------------------------------------------------------ #
+    #  Publicación en lote                                                 #
+    # ------------------------------------------------------------------ #
 
     def publish_batch(self, articles: List[Dict]) -> List[Optional[int]]:
         """
-        Publica una lista de artículos en WordPress.
+        Publica una lista de artículos en WordPress, uno a uno.
 
         Args:
-            articles: Lista de artículos a publicar.
+            articles: Lista de artículos (mismos campos que create_post).
 
         Returns:
             Lista de IDs de posts creados (None para los que fallaron).
         """
-        results = []
+        results: List[Optional[int]] = []
         for article in articles:
-            post_id = self.publish(article)
+            post_id = self.create_post(article)
             results.append(post_id)
         return results
-
-    def get_categories(self) -> List[Dict]:
-        """
-        Obtiene las categorías disponibles en el sitio WordPress.
-
-        Returns:
-            Lista de categorías con 'id' y 'name'.
-        """
-        # TODO: Implementar usando wordpress_xmlrpc.methods.taxonomies.GetTerms
-        raise NotImplementedError("get_categories aún no implementado")
-
-    def update_post(self, post_id: int, article: Dict) -> bool:
-        """
-        Actualiza un post existente en WordPress.
-
-        Args:
-            post_id: ID del post a actualizar.
-            article: Nuevos datos del artículo.
-
-        Returns:
-            True si la actualización fue exitosa.
-        """
-        # TODO: Implementar usando wordpress_xmlrpc.methods.posts.EditPost
-        raise NotImplementedError("update_post aún no implementado")
