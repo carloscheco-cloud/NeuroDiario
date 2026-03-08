@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Entorno virtual
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# Variables de entorno (NUNCA commitear)
+.env
+
+# Distribución / empaquetado
+*.egg-info/
+dist/
+build/
+*.egg
+MANIFEST
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+
+# Base de datos local
+*.sqlite
+*.sqlite3
+*.db
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Modelos y datos grandes (usar Git LFS si se necesitan)
+*.pkl
+*.joblib
+*.h5
+*.onnx
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Temporales
+tmp/
+temp/
