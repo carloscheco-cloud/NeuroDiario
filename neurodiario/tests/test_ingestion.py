@@ -8,6 +8,7 @@ from datetime import datetime
 
 from neurodiario.ingestion.rss_fetcher import RSSFetcher
 from neurodiario.ingestion.article_parser import ArticleParser
+from neurodiario.ingestion.deduplicator import normalize_title, similarity_ratio
 from neurodiario.ingestion.sources_config import SOURCES, VALID_CATEGORIES
 
 
@@ -111,6 +112,45 @@ class TestArticleParser:
         with patch.object(self.parser.session, "get", side_effect=Exception("timeout")):
             result = self.parser._fetch_content("https://example.com")
         assert result == ""
+
+    def test_clean_html_removes_scripts(self):
+        """_extract_text debe eliminar etiquetas script y conservar texto útil."""
+        dirty_html = "<p>Texto <script>alert('xss')</script> limpio</p>"
+        clean = self.parser._extract_text(dirty_html)
+        assert "script" not in clean.lower()
+        assert "Texto" in clean
+
+
+class TestDeduplicator:
+    """Tests para el módulo de deduplicación."""
+
+    def test_normalize_title(self):
+        """Verifica normalización de títulos: minúsculas y sin espacios extras."""
+        title = "  TÍTULO CON ESPACIOS  "
+        normalized = normalize_title(title)
+        assert normalized == "título con espacios"
+
+    def test_normalize_title_empty(self):
+        """normalize_title debe retornar cadena vacía con entrada vacía."""
+        assert normalize_title("") == ""
+        assert normalize_title(None) == ""
+
+    def test_similarity_ratio_identical(self):
+        """Cadenas idénticas deben tener similitud 1.0."""
+        assert similarity_ratio("igual", "igual") == 1.0
+
+    def test_similarity_ratio_similar(self):
+        """Títulos similares deben superar umbral de 0.5."""
+        title1 = "Reforma Fiscal en RD"
+        title2 = "Reforma fiscal dominicana"
+        ratio = similarity_ratio(title1, title2)
+        assert 0 <= ratio <= 1
+        assert ratio > 0.5
+
+    def test_similarity_ratio_different(self):
+        """Textos completamente distintos deben tener similitud baja."""
+        ratio = similarity_ratio("economía dominicana", "deportes béisbol")
+        assert ratio < 0.5
 
 
 class TestSourcesConfig:
