@@ -48,6 +48,24 @@ class EntityExtractor:
                 raise
         return self._nlp
 
+    def extract_entities(self, text: str) -> Dict[str, List[str]]:
+        """Alias de extract(). Extrae entidades del texto y las agrupa por tipo."""
+        self._last_entities = self.extract(text)
+        return self._last_entities
+
+    def get_persons(self) -> List[str]:
+        """Devuelve las personas extraídas en la última llamada a extract_entities()."""
+        return getattr(self, "_last_entities", {}).get("persona", [])
+
+    def get_locations(self) -> List[str]:
+        """Devuelve los lugares extraídos en la última llamada a extract_entities()."""
+        entities = getattr(self, "_last_entities", {})
+        return entities.get("lugar", []) + entities.get("entidad_geopolítica", [])
+
+    def get_organizations(self) -> List[str]:
+        """Devuelve las organizaciones extraídas en la última llamada a extract_entities()."""
+        return getattr(self, "_last_entities", {}).get("organización", [])
+
     def extract(self, text: str) -> Dict[str, List[str]]:
         """
         Extrae entidades de un texto y las agrupa por tipo.

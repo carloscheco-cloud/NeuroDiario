@@ -40,14 +40,15 @@ class ArticleParser:
             article: Diccionario de artículo con al menos la clave 'url'.
 
         Returns:
-            El mismo diccionario con 'raw_content' y 'word_count' añadidos.
+            El mismo diccionario con 'raw_html', 'raw_content' y 'word_count' añadidos.
         """
         url = article.get("url", "")
         if not url:
             logger.warning("Artículo sin URL, omitiendo parseo")
             return article
 
-        content = self._fetch_content(url)
+        raw_html, content = self._fetch_content(url)
+        article["raw_html"] = raw_html
         article["raw_content"] = content
         article["word_count"] = len(content.split()) if content else 0
         return article
@@ -67,23 +68,43 @@ class ArticleParser:
             parsed.append(self.parse(article))
         return parsed
 
-    def _fetch_content(self, url: str) -> str:
+    def _fetch_content(self, url: str) -> tuple:
         """
         Descarga una página y extrae el texto del artículo principal.
+
+        Intenta primero con newspaper3k (MEJORA 3A: con timeout explícito).
+        Si falla, usa requests + BeautifulSoup como fallback.
 
         Args:
             url: URL del artículo a descargar.
 
         Returns:
-            Texto plano del artículo, o cadena vacía si falla.
+            Tupla (raw_html, texto_plano). Ambos cadena vacía si falla.
         """
+        # MEJORA 3A: usar newspaper3k con timeout para mejor extracción
+        try:
+            from newspaper import Article as NewspaperArticle
+
+            article_obj = NewspaperArticle(url, language="es", request_timeout=self.timeout)
+            article_obj.download()
+            raw_html = article_obj.html
+            article_obj.parse()
+            content = article_obj.text
+            if content:
+                return raw_html, content
+            logger.debug(f"newspaper3k no extrajo contenido de {url}, usando fallback")
+        except Exception as e:
+            logger.debug(f"newspaper3k falló para {url}: {e}, usando fallback")
+
+        # Fallback: requests + BeautifulSoup
         try:
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
-            return self._extract_text(response.text)
+            raw_html = response.text
+            return raw_html, self._extract_text(raw_html)
         except requests.RequestException as e:
             logger.error(f"Error descargando {url}: {e}")
-            return ""
+            return "", ""
 
     def _extract_text(self, html: str) -> str:
         """
