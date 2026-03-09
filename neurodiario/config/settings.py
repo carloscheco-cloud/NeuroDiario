@@ -18,7 +18,8 @@ class Settings:
 
     # ── WordPress ──────────────────────────────────────────────────────────────
     WORDPRESS_URL: str = os.getenv("WORDPRESS_URL", "https://neurodiario.com")
-    WORDPRESS_USER: str = os.getenv("WORDPRESS_USER", "")
+    WORDPRESS_USER: str = os.getenv("WORDPRESS_USER", "neurodiario")
+    WORDPRESS_APP_PASSWORD: str = os.getenv("WORDPRESS_APP_PASSWORD", "AQUI_EL_APPLICATION_PASSWORD")
     WORDPRESS_PASSWORD: str = os.getenv("WORDPRESS_PASSWORD", "")
 
     # ── Base de datos ──────────────────────────────────────────────────────────
