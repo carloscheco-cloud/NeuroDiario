@@ -226,6 +226,7 @@ class NLPPipeline:
                         "content": a.clean_content or a.raw_content or "",
                         "source_name": a.source.name if a.source else "Desconocido",
                         "url": a.url,
+                        "fetched_at": a.fetched_at,
                     }
                     for a in recent_orm
                 ]
@@ -250,12 +251,26 @@ class NLPPipeline:
             logger.info("No se formaron clusters.")
             return []
 
+        # Paso 1.5: detectar story velocity y marcar breaking stories
+        try:
+            from neurodiario.nlp.story_detector import detect_story_velocity
+            clusters = detect_story_velocity(clusters)
+        except Exception as exc:
+            logger.error(f"Error en story velocity detection: {exc}", exc_info=True)
+
         # Paso 2: detectar tendencias
         try:
             trends = self.trend_detector.detect_trends(clusters)
         except Exception as exc:
             logger.error(f"Error en detección de tendencias: {exc}", exc_info=True)
             return []
+
+        # Propagar velocity e is_breaking_story de los clusters a las tendencias
+        velocity_by_topic = {c["topic"]: c for c in clusters}
+        for trend in trends:
+            cluster_data = velocity_by_topic.get(trend["topic"], {})
+            trend["velocity"] = cluster_data.get("velocity", 0.0)
+            trend["is_breaking_story"] = cluster_data.get("is_breaking_story", False)
 
         # Paso 3: source scoring + recency + trend ranking + angle detection
         trends = self._enrich_and_rank_trends(trends, article_dicts)
@@ -360,7 +375,8 @@ class NLPPipeline:
             logger.info("No hay tendencias para generar artículos.")
             return
 
-        # Solo generar artículos para los top 3 trends (ya ordenados por score)
+        # Priorizar breaking stories; dentro de cada grupo mantener orden por score
+        trends = sorted(trends, key=lambda t: (not t.get("is_breaking_story", False), -t.get("score", 0)))
         trends = trends[:3]
 
         logger.info("=" * 60)
