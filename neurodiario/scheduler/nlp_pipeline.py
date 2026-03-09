@@ -257,7 +257,10 @@ class NLPPipeline:
             logger.error(f"Error en detección de tendencias: {exc}", exc_info=True)
             return []
 
-        # Paso 3: guardar tendencias en BD
+        # Paso 3: source scoring + recency + trend ranking + angle detection
+        trends = self._enrich_and_rank_trends(trends, article_dicts)
+
+        # Paso 4: guardar tendencias en BD
         for trend in trends:
             save_trend(
                 topic=trend["topic"],
@@ -265,9 +268,60 @@ class NLPPipeline:
                 sources=trend["sources"],
             )
 
-        # Paso 4: mostrar resultado en consola
+        # Paso 5: mostrar resultado en consola
         self._display_trends(trends)
         return trends
+
+    @staticmethod
+    def _enrich_and_rank_trends(trends: List[Dict], article_dicts: List[Dict]) -> List[Dict]:
+        """
+        Enriquece cada tendencia con source_score y recency_score,
+        aplica trend ranking y añade angle detection a las top 3.
+
+        Args:
+            trends: Tendencias crudas devueltas por TrendDetector.
+            article_dicts: Artículos recientes usados para calcular source scores.
+
+        Returns:
+            Lista de tendencias ordenada por score, con campos 'source_score',
+            'recency_score', 'score' y 'angle' añadidos.
+        """
+        from neurodiario.nlp.source_ranker import calculate_source_score
+        from neurodiario.nlp.trend_ranker import rank_trends
+        from neurodiario.nlp.angle_detector import detect_angle
+
+        if not trends:
+            return []
+
+        # 1) Source scoring: score de calidad por fuente para cada tendencia
+        for trend in trends:
+            trend_sources = set(trend.get("sources", []))
+            trend_articles = [a for a in article_dicts if a.get("source_name") in trend_sources]
+            trend["source_score"] = calculate_source_score(trend_articles)
+
+        # 2) Recency score: normalizado por posición en la lista (primera = más reciente)
+        n = len(trends)
+        for i, trend in enumerate(trends):
+            trend["recency_score"] = round(1.0 - (i / n) * 0.5, 3)  # rango [0.5, 1.0]
+
+        # 3) Trend ranking: ordena por score compuesto
+        ranked = rank_trends(trends)
+
+        # 4) Angle detection sobre las top 3
+        for trend in ranked[:3]:
+            trend_sources = set(trend.get("sources", []))
+            combined_text = " ".join(
+                a.get("content", "") for a in article_dicts
+                if a.get("source_name") in trend_sources
+            )
+            trend["angle"] = detect_angle(combined_text)
+            logger.info(
+                f"  Tendencia '{trend['topic']}' — score={trend['score']} "
+                f"| ángulo={trend['angle']['angle']} ({trend['angle']['confidence']:.2f}) "
+                f"| fuentes={trend['source_score']}"
+            )
+
+        return ranked
 
     @staticmethod
     def _display_trends(trends: List[Dict]) -> None:
@@ -306,8 +360,11 @@ class NLPPipeline:
             logger.info("No hay tendencias para generar artículos.")
             return
 
+        # Solo generar artículos para los top 3 trends (ya ordenados por score)
+        trends = trends[:3]
+
         logger.info("=" * 60)
-        logger.info("GENERANDO ARTÍCULOS POR TENDENCIA")
+        logger.info("GENERANDO ARTÍCULOS POR TENDENCIA (top 3)")
         logger.info("=" * 60)
 
         # Obtener artículos procesados recientes como contexto para la generación
