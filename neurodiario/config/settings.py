@@ -67,4 +67,4 @@ class Settings:
  
  
 # Instancia única usada en toda la aplicación
-settings = Settings()Settings()
+settings = Settings()
