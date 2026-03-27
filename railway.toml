@@ -1,0 +1,17 @@
+[build]
+builder = "NIXPACKS"
+
+[build.nixpacksPlan.phases.setup]
+nixPkgs = ["python311", "gcc"]
+
+[build.nixpacksPlan.phases.install]
+cmds = [
+  "pip install --upgrade pip",
+  "pip install -r requirements.txt",
+  "python -m spacy download es_core_news_lg"
+]
+
+[deploy]
+startCommand = "python -m neurodiario.scheduler.auto_scheduler"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
