@@ -42,4 +42,4 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # Run the scheduler (shell form, NOT JSON array)
-CMD python scheduler/auto_scheduler.py
+CMD python -m scheduler.auto_scheduler
