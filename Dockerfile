@@ -42,4 +42,4 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # Run the scheduler (shell form, NOT JSON array)
-CMD python -m scheduler.auto_scheduler
+CMD python -m neurodiario.scheduler.pipeline && python -m neurodiario.scheduler.nlp_pipeline
