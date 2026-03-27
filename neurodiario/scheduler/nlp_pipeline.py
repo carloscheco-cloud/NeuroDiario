@@ -53,7 +53,8 @@ class NLPPipeline:
     def extractor(self):
         if self._extractor is None:
             from neurodiario.nlp.entity_extractor import EntityExtractor
-            self._extractor = EntityExtractor(model_name="es_core_news_sm")
+            from neurodiario.config.settings import settings
+            self._extractor = EntityExtractor(model_name=settings.SPACY_MODEL)
         return self._extractor
 
     @property
@@ -204,11 +205,11 @@ class NLPPipeline:
         from neurodiario.db.models import Article
         from sqlalchemy.orm import joinedload
 
-        logger.info("=" * 60)
-        logger.info("DETECTANDO TENDENCIAS")
+        logger.info("\n" + "=" * 60)
+        logger.info("MÓDULO 4: DETECCIÓN DE TENDENCIAS")
         logger.info("=" * 60)
 
-        # Obtener artículos recientes ya procesados, con su fuente cargada
+        # Paso 0: obtener artículos procesados recientes (últimas 24h)
         try:
             with get_db() as db:
                 recent_orm = (
@@ -219,30 +220,35 @@ class NLPPipeline:
                     .limit(200)
                     .all()
                 )
-                # Convertir a dicts mientras la sesión está activa
                 article_dicts = [
                     {
                         "title": a.title or "",
                         "content": a.clean_content or a.raw_content or "",
-                        "source_name": a.source.name if a.source else "Desconocido",
                         "url": a.url,
+                        "source_name": a.source.name if a.source else "Desconocido",
                         "fetched_at": a.fetched_at,
                     }
                     for a in recent_orm
                 ]
         except Exception as exc:
-            logger.error(f"Error obteniendo artículos para clustering: {exc}", exc_info=True)
+            logger.error(f"Error obteniendo artículos procesados: {exc}", exc_info=True)
             return []
 
         if not article_dicts:
             logger.info("No hay artículos procesados disponibles para clustering.")
             return []
 
-        logger.info(f"Artículos disponibles para clustering: {len(article_dicts)}")
+        logger.info(f"Artículos disponibles: {len(article_dicts)}")
 
         # Paso 1: clustering temático
         try:
-            clusters = self.clusterer.cluster_articles(article_dicts)
+            clusters = self.clusterer.cluster_articles(
+                articles=article_dicts,
+                method="dbscan",
+                eps=0.35,
+                min_samples=2,
+                n_keywords=5,
+            )
         except Exception as exc:
             logger.error(f"Error en clustering: {exc}", exc_info=True)
             return []
