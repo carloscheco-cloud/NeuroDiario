@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 # Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies one by one for better error detection
+# Install Python dependencies
 RUN pip install --no-cache-dir sqlalchemy==2.0.25
 RUN pip install --no-cache-dir psycopg2-binary==2.9.9
 RUN pip install --no-cache-dir requests==2.31.0
@@ -31,7 +31,7 @@ RUN pip install --no-cache-dir numpy==1.26.4
 RUN pip install --no-cache-dir scikit-learn==1.4.0
 RUN pip install --no-cache-dir spacy==3.7.4
 
-# Download spaCy model
+# Download spaCy model directly from pip
 RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/es_core_news_lg-3.7.0/es_core_news_lg-3.7.0-py3-none-any.whl
 
 # Copy application code
@@ -41,9 +41,5 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Health check (optional)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
-
-# Run the scheduler
-CMD ["python", "-m", "neurodiario.scheduler.auto_scheduler"]"neurodiario.scheduler.auto_scheduler"]
+# Run the scheduler (shell form, NOT JSON array)
+CMD python -m neurodiario.scheduler.auto_scheduler
