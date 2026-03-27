@@ -32,7 +32,7 @@ RUN pip install --no-cache-dir scikit-learn==1.4.0
 RUN pip install --no-cache-dir spacy==3.7.4
 
 # Download spaCy model
-RUN python -m spacy download es_core_news_lg
+RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/es_core_news_lg-3.7.0/es_core_news_lg-3.7.0-py3-none-any.whl
 
 # Copy application code
 COPY . .
