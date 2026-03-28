@@ -19,4 +19,5 @@ APScheduler==3.10.4
 
 # Compatibility
 numpy==1.26.4
-sentence-transformers==2.2.2
+sentence-transformers==2.7.0
+huggingface-hub==0.23.0
