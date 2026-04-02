@@ -1,25 +1,43 @@
 """
-Módulo generador de artículos periodísticos.
-Usa Claude AI para generar resúmenes, análisis y artículos originales
-basados en las noticias recolectadas.
+Módulo generador de artículos periodísticos - MEJORADO PARA FASE 1
+Usa Claude AI para generar artículos originales citando fuentes apropiadamente.
 """
 
 import logging
 import re
 from typing import Dict, List, Optional
+from datetime import datetime
 
 import anthropic
 
 logger = logging.getLogger(__name__)
 
-# Modelo de Claude a utilizar
-DEFAULT_MODEL = "claude-opus-4-6"
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
-# Prompt base para generación de artículos
-SYSTEM_PROMPT = """Eres un periodista experto en noticias dominicanas.
-Tu tarea es generar artículos periodísticos en español, claros, objetivos y bien estructurados.
-Usa un tono profesional, evita sensacionalismo y cita las fuentes cuando corresponda.
-Los artículos deben estar optimizados para SEO y WordPress."""
+SYSTEM_PROMPT = """Eres un periodista profesional de NeuroDiario, un medio digital dominicano.
+
+Tu tarea es redactar artículos periodísticos originales basados en noticias de otros medios.
+
+REGLAS CRÍTICAS:
+1. NUNCA copies texto literal de las fuentes
+2. SIEMPRE cita la fuente original al inicio del artículo
+3. Reescribe completamente con tus propias palabras
+4. Mantén un tono profesional y objetivo
+5. Escribe en español dominicano natural
+6. Optimiza para SEO y lectura web
+
+ESTRUCTURA REQUERIDA:
+- Título atractivo (máximo 70 caracteres)
+- Párrafo inicial citando la fuente
+- Desarrollo del tema (3-4 párrafos)
+- Contexto relevante para audiencia dominicana
+- Cierre con implicaciones o próximos pasos
+
+Al final SIEMPRE incluye:
+---
+Fuente: [Nombre del medio]
+Fecha: [Fecha de publicación]
+"""
 
 
 class ArticleGenerator:
@@ -28,84 +46,164 @@ class ArticleGenerator:
     def __init__(self, api_key: Optional[str] = None, model: str = DEFAULT_MODEL):
         """
         Args:
-            api_key: Clave de API de Anthropic. Si es None, usa ANTHROPIC_API_KEY del entorno.
+            api_key: Clave de API de Anthropic.
             model: ID del modelo de Claude a usar.
         """
         self.model = model
         self.client = anthropic.Anthropic(api_key=api_key)
 
-    def generate_summary(self, articles: List[Dict], topic: str) -> str:
+    def generate_from_single_article(
+        self,
+        title: str,
+        content: str,
+        source: str,
+        category: str,
+        url: str = "",
+        published_at: Optional[datetime] = None,
+    ) -> Dict:
         """
-        Genera un resumen periodístico sobre un tema a partir de múltiples artículos.
+        Genera un artículo original para NeuroDiario basado en un artículo fuente.
 
         Args:
-            articles: Lista de artículos fuente con 'title', 'url' y 'raw_content'.
-            topic: Tema central del resumen.
+            title: Título del artículo original
+            content: Contenido del artículo original
+            source: Nombre del medio fuente (ej: "Diario Libre")
+            category: Categoría del artículo
+            url: URL del artículo original
+            published_at: Fecha de publicación original
 
         Returns:
-            Texto del resumen generado por Claude.
+            Dict con title, content, excerpt, category, tags, source_citation
         """
-        sources_text = self._format_sources(articles)
-        prompt = (
-            f"Basándote en los siguientes artículos de noticias dominicanas sobre '{topic}', "
-            f"redacta un resumen periodístico completo (500-800 palabras) que sintetice "
-            f"los puntos más importantes:\n\n{sources_text}"
-        )
-        return self._call_api(prompt)
+        # Truncar contenido si es muy largo
+        content_trimmed = content[:3000] if len(content) > 3000 else content
 
-    def generate_analysis(self, articles: List[Dict], topic: str) -> str:
-        """
-        Genera un artículo de análisis o opinión fundamentado sobre un tema.
+        fecha_str = ""
+        if published_at:
+            fecha_str = published_at.strftime("%d de %B, %Y")
 
-        Args:
-            articles: Lista de artículos fuente.
-            topic: Tema a analizar.
+        prompt = f"""Redacta un artículo periodístico ORIGINAL para NeuroDiario basado en esta noticia de {source}:
 
-        Returns:
-            Texto del análisis generado.
-        """
-        sources_text = self._format_sources(articles)
-        prompt = (
-            f"Basándote en las siguientes noticias, redacta un artículo de análisis "
-            f"profundo sobre '{topic}' para la audiencia dominicana. "
-            f"Incluye contexto histórico, implicaciones y perspectivas a futuro (800-1200 palabras):\n\n"
-            f"{sources_text}"
-        )
-        return self._call_api(prompt)
+ARTÍCULO FUENTE:
+Título: {title}
+Medio: {source}
+Categoría: {category}
+{f'Fecha: {fecha_str}' if fecha_str else ''}
+{f'URL: {url}' if url else ''}
+
+Contenido:
+{content_trimmed}
+
+INSTRUCCIONES:
+1. Crea un título NUEVO y atractivo (máximo 70 caracteres)
+2. Primer párrafo debe mencionar: "Según reportó {source}..." o similar
+3. Reescribe COMPLETAMENTE el contenido con tus propias palabras
+4. Añade contexto relevante para lectores dominicanos
+5. Mantén objetividad periodística
+6. Al final incluye la cita de fuente en este formato exacto:
+
+---
+**Fuente:** {source}
+{f'**Fecha:** {fecha_str}' if fecha_str else ''}
+{f'**Enlace:** {url}' if url else ''}
+
+Responde SOLO con el artículo completo, sin comentarios adicionales."""
+
+        try:
+            response_text = self._call_api(prompt, max_tokens=2000)
+            
+            # Parsear respuesta
+            parsed = self._parse_generated_article(response_text, source, category)
+            
+            # Agregar metadata
+            parsed["source_citation"] = {
+                "source": source,
+                "url": url,
+                "published_at": published_at,
+            }
+            
+            return parsed
+
+        except Exception as e:
+            logger.error(f"Error generando artículo: {e}")
+            raise
 
     def generate_digest(self, trends: List[Dict]) -> str:
         """
-        Genera un boletín diario con las principales tendencias del día.
+        Genera un boletín diario con las principales tendencias.
 
         Args:
-            trends: Lista de tendencias detectadas por TrendDetector.
+            trends: Lista de tendencias detectadas
 
         Returns:
-            Texto del boletín diario.
+            Texto del boletín
         """
         trends_text = "\n".join(
-            f"- {t['topic']} ({t['count']} menciones, categoría: {t['category']})"
-            for t in trends
+            f"- {t['topic']} ({t.get('article_count', 0)} artículos)"
+            for t in trends[:5]
         )
-        prompt = (
-            f"Las siguientes son las principales tendencias en noticias dominicanas de hoy:\n\n"
-            f"{trends_text}\n\n"
-            f"Redacta un boletín periodístico diario (400-600 palabras) que presente "
-            f"estas tendencias de forma ordenada y atractiva para el lector dominicano."
-        )
+        
+        prompt = f"""Redacta un boletín periodístico diario para NeuroDiario.
+
+TENDENCIAS DEL DÍA:
+{trends_text}
+
+FORMATO:
+- Título atractivo para el boletín
+- Introducción breve
+- Resumen de cada tendencia (1 párrafo cada una)
+- Cierre con perspectiva general
+
+Extensión: 400-600 palabras
+Tono: Profesional pero accesible"""
+
         return self._call_api(prompt)
 
-    def _call_api(self, user_prompt: str, max_tokens: int = 2048) -> str:
+    def create_article(self, trend: Dict, articles: List[Dict]) -> Dict:
         """
-        Realiza la llamada a la API de Claude y retorna el texto generado.
+        MÉTODO ORIGINAL - Genera artículo basado en tendencia y múltiples fuentes.
 
         Args:
-            user_prompt: Instrucción específica para el modelo.
-            max_tokens: Número máximo de tokens en la respuesta.
+            trend: Tendencia detectada
+            articles: Artículos relacionados
 
         Returns:
-            Texto generado por el modelo.
+            Dict con artículo estructurado
         """
+        # Limitar artículos
+        articles = articles[:5]
+        sources_text = self._format_sources(articles)
+        topic = trend.get("topic", "")
+        category = trend.get("category", "general")
+
+        # Extraer nombres de medios únicos
+        source_names = list(set(a.get("source", "Medios locales") for a in articles if a.get("source")))
+        sources_citation = ", ".join(source_names[:3])
+
+        prompt = f"""Redacta un artículo periodístico ORIGINAL sobre '{topic}' para NeuroDiario.
+
+FUENTES BASE:
+{sources_text}
+
+INSTRUCCIONES:
+1. Título atractivo (máximo 70 caracteres)
+2. Primer párrafo menciona: "Según reportaron {sources_citation}..."
+3. Reescribe completamente con tus palabras
+4. Estructura: Introducción → Desarrollo → Contexto → Cierre
+5. 600-800 palabras
+6. Al final incluye:
+
+---
+**Fuentes:** {sources_citation}
+**Categoría:** {category}
+
+Responde SOLO con el artículo."""
+
+        response_text = self._call_api(prompt, max_tokens=2500)
+        return self._parse_article_response(response_text, articles)
+
+    def _call_api(self, user_prompt: str, max_tokens: int = 2048) -> str:
+        """Llama a la API de Claude."""
         try:
             message = self.client.messages.create(
                 model=self.model,
@@ -115,90 +213,80 @@ class ArticleGenerator:
             )
             return message.content[0].text
         except anthropic.APIError as e:
-            logger.error(f"Error en llamada a Claude API: {e}")
+            logger.error(f"Error en Claude API: {e}")
             raise
 
-    def create_article(self, trend: Dict, articles: List[Dict]) -> Dict:
+    def _parse_generated_article(self, response_text: str, source: str, category: str) -> Dict:
         """
-        Genera un artículo estructurado basado en una tendencia y sus artículos fuente.
+        Parsea el artículo generado y extrae componentes.
 
         Args:
-            trend: Diccionario con información de la tendencia (topic, category, etc.).
-            articles: Lista de artículos fuente relacionados con la tendencia.
+            response_text: Texto generado por Claude
+            source: Medio fuente
+            category: Categoría del artículo
 
         Returns:
-            Diccionario con title, summary, content y sources.
+            Dict con title, content, excerpt, category, tags
         """
-        articles = articles[:5]  # Limitar a máximo 5 artículos para evitar prompts muy largos
+        lines = response_text.strip().split("\n")
+        
+        # Extraer título (primera línea no vacía)
+        title = ""
+        for line in lines:
+            clean_line = line.strip().lstrip("#").strip()
+            if clean_line and len(clean_line) > 10:
+                title = clean_line
+                break
+        
+        if not title:
+            title = "Artículo de NeuroDiario"
+
+        # Contenido completo
+        content = response_text.strip()
+
+        # Extracto (primeras 2-3 oraciones)
+        sentences = re.split(r"(?<=[.!?])\s+", content)
+        excerpt = " ".join(sentences[:3]) if len(sentences) >= 3 else sentences[0] if sentences else ""
+        excerpt = excerpt[:200] + "..." if len(excerpt) > 200 else excerpt
+
+        # Tags básicos basados en categoría
+        tags = [category, source, "República Dominicana"]
+
+        return {
+            "title": title,
+            "content": content,
+            "excerpt": excerpt,
+            "category": category,
+            "tags": tags,
+        }
+
+    def _parse_article_response(self, response_text: str, articles: List[Dict]) -> Dict:
+        """MÉTODO ORIGINAL - Parsea respuesta estructurada."""
         sources = [a.get("url", "") for a in articles if a.get("url")]
-        sources_text = self._format_sources(articles)
-        topic = trend.get("topic", "")
-        category = trend.get("category", "")
-
-        prompt = (
-            f"Basándote en los siguientes artículos sobre '{topic}' (categoría: {category}), "
-            f"redacta un artículo periodístico completo en español.\n\n"
-            f"Usa EXACTAMENTE este formato con estos encabezados:\n\n"
-            f"## Título\n[título del artículo]\n\n"
-            f"## Resumen\n[resumen en 2-3 oraciones]\n\n"
-            f"## Contexto\n[contexto e información de fondo]\n\n"
-            f"## Detalle\n[desarrollo completo del tema]\n\n"
-            f"## Análisis\n[análisis e implicaciones]\n\n"
-            f"Artículos fuente:\n\n{sources_text}"
-        )
-
-        response_text = self._call_api(prompt)
-        return self._parse_article_response(response_text, sources)
-
-    def _parse_article_response(self, response_text: str, sources: List[str]) -> Dict:
-        """
-        Parsea la respuesta del modelo buscando secciones estructuradas.
-        Si no se detectan las secciones esperadas, aplica un fallback usando el texto completo.
-
-        Args:
-            response_text: Texto devuelto por el modelo.
-            sources: Lista de URLs de los artículos fuente.
-
-        Returns:
-            Diccionario con title, summary, content y sources.
-        """
-        section_pattern = re.compile(
-            r"##\s*Título\s*\n(?P<title>.+?)\n.*?"
-            r"##\s*Resumen\s*\n(?P<summary>.+?)\n.*?"
-            r"##\s*Contexto\s*\n(?P<context>.+?)\n.*?"
-            r"##\s*Detalle\s*\n(?P<detail>.+?)\n.*?"
-            r"##\s*Análisis\s*\n(?P<analysis>.+?)(?:\Z|(?=##))",
-            re.DOTALL | re.IGNORECASE,
-        )
-
-        match = section_pattern.search(response_text)
-        if match:
-            title = match.group("title").strip()
-            summary = match.group("summary").strip()
-            content = "\n\n".join([
-                match.group("context").strip(),
-                match.group("detail").strip(),
-                match.group("analysis").strip(),
-            ])
-            return {"title": title, "summary": summary, "content": content, "sources": sources}
-
-        # Fallback: secciones no encontradas, usar texto completo
-        logger.warning("No se detectaron secciones estructuradas en la respuesta; aplicando fallback.")
+        
+        # Intentar extraer título
         lines = [line for line in response_text.strip().splitlines() if line.strip()]
         title = lines[0].lstrip("#").strip() if lines else "Sin título"
 
+        # Extracto
         sentences = re.split(r"(?<=[.!?])\s+", response_text.strip())
         summary = " ".join(sentences[:2]).strip() if sentences else response_text[:200]
 
-        return {"title": title, "summary": summary, "content": response_text.strip(), "sources": sources}
+        return {
+            "title": title,
+            "summary": summary,
+            "content": response_text.strip(),
+            "sources": sources,
+        }
 
     def _format_sources(self, articles: List[Dict]) -> str:
-        """Formatea una lista de artículos como texto para incluir en el prompt."""
+        """Formatea artículos como texto para el prompt."""
         parts = []
-        for i, article in enumerate(articles[:10], 1):  # Máximo 10 fuentes
+        for i, article in enumerate(articles[:5], 1):
             parts.append(
                 f"[Fuente {i}] {article.get('title', 'Sin título')}\n"
+                f"Medio: {article.get('source', 'Desconocido')}\n"
                 f"URL: {article.get('url', '')}\n"
-                f"Contenido: {article.get('raw_content', '')[:800]}..."
+                f"Contenido: {article.get('raw_content', '')[:500]}..."
             )
         return "\n\n".join(parts)
