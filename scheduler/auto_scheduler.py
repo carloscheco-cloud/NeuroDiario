@@ -5,7 +5,7 @@ Ejecuta automáticamente los pipelines de ingesta, NLP y PUBLICACIÓN.
 Flujo completo:
 - Cada 15 min: Ingesta RSS
 - Cada 20 min: Procesamiento NLP
-- Cada 2 horas: Generación con Claude + Publicación en WordPress
+- Cada 30 min: Generación con Claude + Publicación en WordPress
 
 Uso:
     python scheduler/auto_scheduler.py
@@ -58,8 +58,8 @@ def _job_publishing():
     logger.info("JOB: Generación y Publicación")
     logger.info("=" * 60)
     try:
-        # Publicar hasta 5 artículos por ejecución = 60 artículos/día
-        published = run_publishing_pipeline(max_articles=5)
+        # Publicar 2-3 artículos cada 30 min = ~96 artículos/día
+        published = run_publishing_pipeline(max_articles=2)
         logger.info(f"Publicados: {published} artículos")
     except Exception as e:
         logger.error(f"Error en publicación: {e}", exc_info=True)
@@ -79,7 +79,7 @@ def start_scheduler() -> BackgroundScheduler:
     logger.info("Pipelines activos:")
     logger.info("  - Ingesta RSS: cada 15 minutos")
     logger.info("  - Procesamiento NLP: cada 20 minutos")
-    logger.info("  - Publicación: cada 2 horas")
+    logger.info("  - Publicación: cada 30 minutos (noticias actuales)")
     logger.info("=" * 60)
 
     scheduler = BackgroundScheduler()
@@ -104,11 +104,11 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
 
-    # Tarea 3: Publicación cada 2 horas
+    # Tarea 3: Publicación cada 30 minutos (noticias más actuales)
     scheduler.add_job(
         _job_publishing,
         trigger="interval",
-        hours=2,
+        minutes=30,
         id="publishing_pipeline",
         name="Generación y Publicación",
         replace_existing=True,
