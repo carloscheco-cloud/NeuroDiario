@@ -1,23 +1,31 @@
 # Core dependencies
-sqlalchemy==2.0.25
+anthropic==0.39.0
+httpx==0.27.2
+
+# Database
 psycopg2-binary==2.9.9
+sqlalchemy==2.0.23
+
+# NLP
+spacy==3.7.2
+sentence-transformers==2.7.0
+transformers==4.35.0
+scikit-learn==1.3.2
+nltk==3.8.1
 
 # Web scraping
+feedparser==6.0.10
+beautifulsoup4==4.12.2
 requests==2.31.0
-feedparser==6.0.11
-beautifulsoup4==4.12.3
-lxml==5.1.0
+lxml==4.9.3
+newspaper3k==0.2.8
 
-# AI/NLP
-anthropic==0.18.1
-spacy==3.7.4
-scikit-learn==1.4.0
+# Scheduling
+apscheduler==3.10.4
+
+# WordPress
+python-wordpress-xmlrpc==2.3
 
 # Utilities
-python-dotenv==1.0.1
-APScheduler==3.10.4
-
-# Compatibility
-numpy==1.26.4
-sentence-transformers==2.7.0
-huggingface-hub==0.23.0
+python-dotenv==1.0.0
+tqdm==4.66.1
