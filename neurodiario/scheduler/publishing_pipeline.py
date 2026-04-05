@@ -9,7 +9,7 @@ Uso:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -62,10 +62,8 @@ class PublishingPipeline:
         from neurodiario.db.models import Article
         from sqlalchemy.orm import joinedload
 
-        # Obtener artículos procesados de las últimas 24 horas
-        # que NO han sido publicados aún
-        cutoff_time = datetime.now() - timedelta(hours=24)
-
+        # Obtener artículos procesados (sin filtro de fecha)
+        # que tengan categoría asignada
         try:
             with get_db() as db:
                 articles_orm = (
@@ -73,7 +71,6 @@ class PublishingPipeline:
                     .options(joinedload(Article.source))
                     .filter(
                         Article.processed == True,  # noqa: E712
-                        Article.fetched_at >= cutoff_time,
                         Article.category != None,  # noqa: E711
                     )
                     .order_by(Article.fetched_at.desc())
