@@ -1,14 +1,13 @@
 """
-NeuroDiario - Auto Scheduler COMPLETO (Fase 1)
-Ejecuta automáticamente los pipelines de ingesta, NLP y PUBLICACIÓN.
+NeuroDiario - Auto Scheduler DEBUG MODE
+CONFIGURACIÓN TEMPORAL PARA DEBUGGING - JOBS CADA 5 MINUTOS
 
-Flujo completo:
-- Cada 15 min: Ingesta RSS
-- Cada 20 min: Procesamiento NLP
-- Cada 30 min: Generación con Claude + Publicación en WordPress
+Flujo acelerado:
+- Cada 5 min: Ingesta RSS
+- Cada 5 min: Procesamiento NLP  
+- Cada 5 min: Generación con Claude + Publicación en WordPress
 
-Uso:
-    python scheduler/auto_scheduler.py
+ADVERTENCIA: Esto es solo para debugging. Cambiar a intervalos normales después.
 """
 import logging
 import time
@@ -16,7 +15,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from neurodiario.scheduler.pipeline import run_ingestion_pipeline
 from neurodiario.scheduler.nlp_pipeline import run_nlp_pipeline
-from neurodiario.scheduler.publishing_pipeline import run_publishing_pipeline
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -57,12 +55,20 @@ def _job_publishing():
     logger.info("=" * 60)
     logger.info("JOB: Generación y Publicación")
     logger.info("=" * 60)
+    
     try:
-        # Publicar 2-3 artículos cada 30 min = ~96 artículos/día
+        # DEBUGGING: Importar aquí para ver si falla
+        logger.info("DEBUG: Importando publishing_pipeline...")
+        from neurodiario.scheduler.publishing_pipeline import run_publishing_pipeline
+        logger.info("DEBUG: Import exitoso")
+        
+        # Publicar 2 artículos
+        logger.info("DEBUG: Llamando a run_publishing_pipeline...")
         published = run_publishing_pipeline(max_articles=2)
+        logger.info(f"DEBUG: Función retornó: {published}")
         logger.info(f"Publicados: {published} artículos")
     except Exception as e:
-        logger.error(f"Error en publicación: {e}", exc_info=True)
+        logger.error(f"ERROR EN PUBLICACIÓN: {e}", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -75,47 +81,47 @@ def start_scheduler() -> BackgroundScheduler:
     Returns:
         La instancia del scheduler ya iniciada.
     """
-    logger.info("Iniciando NeuroDiario Scheduler COMPLETO")
+    logger.info("=" * 60)
+    logger.info("⚠️  MODO DEBUG ACTIVADO - INTERVALOS DE 5 MINUTOS")
+    logger.info("=" * 60)
     logger.info("Pipelines activos:")
-    logger.info("  - Ingesta RSS: cada 15 minutos")
-    logger.info("  - Procesamiento NLP: cada 20 minutos")
-    logger.info("  - Publicación: cada 30 minutos (noticias actuales)")
+    logger.info("  - Ingesta RSS: cada 5 minutos")
+    logger.info("  - Procesamiento NLP: cada 5 minutos")
+    logger.info("  - Publicación: cada 5 minutos")
     logger.info("=" * 60)
 
     scheduler = BackgroundScheduler()
 
-    # Tarea 1: Ingesta RSS cada 15 minutos
+    # MODO DEBUG: Todo cada 5 minutos
     scheduler.add_job(
         _job_ingestion,
         trigger="interval",
-        minutes=15,
+        minutes=5,
         id="ingestion_rss",
         name="Ingesta RSS",
         replace_existing=True,
     )
 
-    # Tarea 2: Pipeline NLP cada 20 minutos
     scheduler.add_job(
         _job_nlp,
         trigger="interval",
-        minutes=20,
+        minutes=5,
         id="nlp_pipeline",
         name="Pipeline NLP",
         replace_existing=True,
     )
 
-    # Tarea 3: Publicación cada 30 minutos (noticias más actuales)
     scheduler.add_job(
         _job_publishing,
         trigger="interval",
-        minutes=30,
+        minutes=5,
         id="publishing_pipeline",
         name="Generación y Publicación",
         replace_existing=True,
     )
 
     scheduler.start()
-    logger.info("✓ NeuroDiario Scheduler iniciado exitosamente")
+    logger.info("✓ Scheduler iniciado en MODO DEBUG")
     logger.info("")
 
     return scheduler
