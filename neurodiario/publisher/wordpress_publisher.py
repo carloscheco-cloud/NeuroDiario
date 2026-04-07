@@ -1,119 +1,235 @@
 """
-Módulo de publicación en WordPress.
-Publica los artículos generados en un sitio WordPress vía XML-RPC.
+WordPress Publisher usando REST API
+Reemplazo de XML-RPC para evitar bloqueos 403
 """
 
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional
+import requests
+from typing import Dict, Optional, List
+from requests.auth import HTTPBasicAuth
 
 logger = logging.getLogger(__name__)
 
 
 class WordPressPublisher:
-    """Publica artículos en WordPress usando la API XML-RPC."""
+    """
+    Publicador de artículos en WordPress usando REST API.
+    
+    Más confiable que XML-RPC y menos propenso a ser bloqueado.
+    """
 
     def __init__(self, url: str, username: str, password: str):
         """
+        Inicializa el publicador con credenciales de WordPress.
+        
         Args:
-            url: URL del sitio WordPress (ej: https://neurodiario.com).
-            username: Nombre de usuario de WordPress con permisos de publicación.
-            password: Contraseña del usuario.
+            url: URL base del sitio WordPress (ej: https://neurodiario.com)
+            username: Nombre de usuario de WordPress
+            password: Contraseña de aplicación de WordPress
         """
-        self.url = url.rstrip("/")
+        self.url = url.rstrip('/')
+        self.api_url = f"{self.url}/wp-json/wp/v2"
         self.username = username
         self.password = password
-        self._client = None
-
-    @property
-    def client(self):
-        """Inicializa el cliente XML-RPC de forma perezosa."""
-        if self._client is None:
-            try:
-                from wordpress_xmlrpc import Client
-                self._client = Client(
-                    f"{self.url}/xmlrpc.php",
-                    self.username,
-                    self.password,
-                )
-                logger.info(f"Conectado a WordPress en {self.url}")
-            except Exception as e:
-                logger.error(f"Error conectando a WordPress: {e}")
-                raise
-        return self._client
+        self.auth = HTTPBasicAuth(username, password)
+        
+        logger.info(f"WordPress Publisher inicializado: {self.url}")
 
     def publish(self, article: Dict) -> Optional[int]:
         """
-        Publica un artículo en WordPress como borrador o publicado.
-
+        Publica un artículo en WordPress como borrador.
+        
         Args:
-            article: Diccionario con los campos del artículo:
-                     - title (str): Título del artículo.
-                     - content (str): Contenido HTML o texto plano.
-                     - categories (List[str]): Categorías de WordPress.
-                     - tags (List[str]): Etiquetas del artículo.
-                     - status (str): 'publish', 'draft' o 'private'.
-
+            article: Diccionario con:
+                - title: Título del artículo
+                - content: Contenido HTML del artículo
+                - categories: Lista de nombres de categorías (opcional)
+                - tags: Lista de nombres de tags (opcional)
+                - status: 'draft' o 'publish' (por defecto: 'draft')
+        
         Returns:
-            ID del post creado en WordPress, o None si falló.
+            ID del post creado, o None si falla
         """
         try:
-            from wordpress_xmlrpc import WordPressPost
-            from wordpress_xmlrpc.methods.posts import NewPost
-
-            post = WordPressPost()
-            post.title = article.get("title", "Sin título")
-            post.content = article.get("content", "")
-            post.post_status = article.get("status", "draft")
-            post.terms_names = {
-                "category": article.get("categories", ["General"]),
-                "post_tag": article.get("tags", []),
+            # 1. Obtener/crear categorías
+            category_ids = []
+            if article.get('categories'):
+                category_ids = self._get_or_create_categories(article['categories'])
+            
+            # 2. Obtener/crear tags
+            tag_ids = []
+            if article.get('tags'):
+                tag_ids = self._get_or_create_tags(article['tags'])
+            
+            # 3. Crear el post
+            post_data = {
+                'title': article['title'],
+                'content': article['content'],
+                'status': article.get('status', 'draft'),
+                'categories': category_ids,
+                'tags': tag_ids,
             }
-
-            post_id = self.client.call(NewPost(post))
-            logger.info(f"Artículo publicado con ID {post_id}: {post.title}")
-            return int(post_id)
-
+            
+            response = requests.post(
+                f"{self.api_url}/posts",
+                json=post_data,
+                auth=self.auth,
+                timeout=30
+            )
+            
+            if response.status_code == 201:
+                post = response.json()
+                post_id = post['id']
+                logger.info(f"✓ Post creado exitosamente - ID: {post_id}")
+                return post_id
+            else:
+                logger.error(f"Error al crear post: {response.status_code} - {response.text}")
+                return None
+                
         except Exception as e:
-            logger.error(f"Error publicando artículo '{article.get('title')}': {e}")
+            logger.error(f"Error publicando artículo '{article.get('title', 'Sin título')}': {e}")
             return None
 
-    def publish_batch(self, articles: List[Dict]) -> List[Optional[int]]:
+    def _get_or_create_categories(self, category_names: List[str]) -> List[int]:
         """
-        Publica una lista de artículos en WordPress.
-
+        Obtiene IDs de categorías, creándolas si no existen.
+        
         Args:
-            articles: Lista de artículos a publicar.
-
+            category_names: Lista de nombres de categorías
+            
         Returns:
-            Lista de IDs de posts creados (None para los que fallaron).
+            Lista de IDs de categorías
         """
-        results = []
-        for article in articles:
-            post_id = self.publish(article)
-            results.append(post_id)
-        return results
+        category_ids = []
+        
+        for name in category_names:
+            try:
+                # Buscar categoría existente
+                response = requests.get(
+                    f"{self.api_url}/categories",
+                    params={'search': name},
+                    auth=self.auth,
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    categories = response.json()
+                    
+                    # Buscar coincidencia exacta
+                    for cat in categories:
+                        if cat['name'].lower() == name.lower():
+                            category_ids.append(cat['id'])
+                            logger.debug(f"Categoría encontrada: {name} (ID: {cat['id']})")
+                            break
+                    else:
+                        # No existe, crear nueva
+                        cat_id = self._create_category(name)
+                        if cat_id:
+                            category_ids.append(cat_id)
+                            
+            except Exception as e:
+                logger.error(f"Error obteniendo categoría '{name}': {e}")
+        
+        return category_ids
 
-    def get_categories(self) -> List[Dict]:
+    def _create_category(self, name: str) -> Optional[int]:
         """
-        Obtiene las categorías disponibles en el sitio WordPress.
-
-        Returns:
-            Lista de categorías con 'id' y 'name'.
-        """
-        # TODO: Implementar usando wordpress_xmlrpc.methods.taxonomies.GetTerms
-        raise NotImplementedError("get_categories aún no implementado")
-
-    def update_post(self, post_id: int, article: Dict) -> bool:
-        """
-        Actualiza un post existente en WordPress.
-
+        Crea una nueva categoría en WordPress.
+        
         Args:
-            post_id: ID del post a actualizar.
-            article: Nuevos datos del artículo.
-
+            name: Nombre de la categoría
+            
         Returns:
-            True si la actualización fue exitosa.
+            ID de la categoría creada, o None si falla
         """
-        # TODO: Implementar usando wordpress_xmlrpc.methods.posts.EditPost
-        raise NotImplementedError("update_post aún no implementado")
+        try:
+            response = requests.post(
+                f"{self.api_url}/categories",
+                json={'name': name},
+                auth=self.auth,
+                timeout=10
+            )
+            
+            if response.status_code == 201:
+                category = response.json()
+                logger.info(f"✓ Categoría creada: {name} (ID: {category['id']})")
+                return category['id']
+            else:
+                logger.error(f"Error creando categoría '{name}': {response.status_code}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error creando categoría '{name}': {e}")
+            return None
+
+    def _get_or_create_tags(self, tag_names: List[str]) -> List[int]:
+        """
+        Obtiene IDs de tags, creándolos si no existen.
+        
+        Args:
+            tag_names: Lista de nombres de tags
+            
+        Returns:
+            Lista de IDs de tags
+        """
+        tag_ids = []
+        
+        for name in tag_names:
+            try:
+                # Buscar tag existente
+                response = requests.get(
+                    f"{self.api_url}/tags",
+                    params={'search': name},
+                    auth=self.auth,
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    tags = response.json()
+                    
+                    # Buscar coincidencia exacta
+                    for tag in tags:
+                        if tag['name'].lower() == name.lower():
+                            tag_ids.append(tag['id'])
+                            logger.debug(f"Tag encontrado: {name} (ID: {tag['id']})")
+                            break
+                    else:
+                        # No existe, crear nuevo
+                        tag_id = self._create_tag(name)
+                        if tag_id:
+                            tag_ids.append(tag_id)
+                            
+            except Exception as e:
+                logger.error(f"Error obteniendo tag '{name}': {e}")
+        
+        return tag_ids
+
+    def _create_tag(self, name: str) -> Optional[int]:
+        """
+        Crea un nuevo tag en WordPress.
+        
+        Args:
+            name: Nombre del tag
+            
+        Returns:
+            ID del tag creado, o None si falla
+        """
+        try:
+            response = requests.post(
+                f"{self.api_url}/tags",
+                json={'name': name},
+                auth=self.auth,
+                timeout=10
+            )
+            
+            if response.status_code == 201:
+                tag = response.json()
+                logger.info(f"✓ Tag creado: {name} (ID: {tag['id']})")
+                return tag['id']
+            else:
+                logger.error(f"Error creando tag '{name}': {response.status_code}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error creando tag '{name}': {e}")
+            return None
