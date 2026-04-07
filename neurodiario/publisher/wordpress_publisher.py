@@ -33,7 +33,12 @@ class WordPressPublisher:
         self.password = password
         self.auth = HTTPBasicAuth(username, password)
         
-        logger.info(f"WordPress Publisher inicializado: {self.url}")
+        logger.info("=" * 70)
+        logger.info("🚀 WORDPRESS PUBLISHER - REST API VERSION")
+        logger.info(f"URL: {self.url}")
+        logger.info(f"API URL: {self.api_url}")
+        logger.info(f"Usuario: {username}")
+        logger.info("=" * 70)
 
     def publish(self, article: Dict) -> Optional[int]:
         """
@@ -51,14 +56,18 @@ class WordPressPublisher:
             ID del post creado, o None si falla
         """
         try:
+            logger.info("🔄 Usando REST API (NO XML-RPC)")
+            
             # 1. Obtener/crear categorías
             category_ids = []
             if article.get('categories'):
+                logger.info(f"Procesando categorías: {article['categories']}")
                 category_ids = self._get_or_create_categories(article['categories'])
             
             # 2. Obtener/crear tags
             tag_ids = []
             if article.get('tags'):
+                logger.info(f"Procesando tags: {article['tags']}")
                 tag_ids = self._get_or_create_tags(article['tags'])
             
             # 3. Crear el post
@@ -70,6 +79,8 @@ class WordPressPublisher:
                 'tags': tag_ids,
             }
             
+            logger.info(f"📝 Enviando POST a: {self.api_url}/posts")
+            
             response = requests.post(
                 f"{self.api_url}/posts",
                 json=post_data,
@@ -77,17 +88,21 @@ class WordPressPublisher:
                 timeout=30
             )
             
+            logger.info(f"📡 Respuesta: {response.status_code}")
+            
             if response.status_code == 201:
                 post = response.json()
                 post_id = post['id']
                 logger.info(f"✓ Post creado exitosamente - ID: {post_id}")
+                logger.info(f"📄 URL: {post.get('link', 'N/A')}")
                 return post_id
             else:
-                logger.error(f"Error al crear post: {response.status_code} - {response.text}")
+                logger.error(f"❌ Error al crear post: {response.status_code}")
+                logger.error(f"Respuesta: {response.text[:500]}")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error publicando artículo '{article.get('title', 'Sin título')}': {e}")
+            logger.error(f"❌ Excepción publicando artículo '{article.get('title', 'Sin título')}': {e}", exc_info=True)
             return None
 
     def _get_or_create_categories(self, category_names: List[str]) -> List[int]:
