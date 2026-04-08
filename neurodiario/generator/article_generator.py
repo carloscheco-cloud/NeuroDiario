@@ -1,10 +1,12 @@
 """
-Módulo generador de artículos periodísticos - MEJORADO PARA FASE 1
-Usa Claude AI para generar artículos originales citando fuentes apropiadamente.
+Módulo generador de artículos periodísticos - NeuroDiario
+Genera artículos originales con formato HTML profesional e imágenes automáticas via Pexels.
 """
 
 import logging
 import re
+import os
+import requests
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -12,46 +14,158 @@ import anthropic
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
-SYSTEM_PROMPT = """Eres un periodista profesional de NeuroDiario, un medio digital dominicano.
+# ─────────────────────────────────────────────
+# MESES EN ESPAÑOL
+# ─────────────────────────────────────────────
+MESES_ES = {
+    1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+    5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+    9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
+}
 
-Tu tarea es redactar artículos periodísticos originales basados en noticias de otros medios.
-
-REGLAS CRÍTICAS:
-1. NUNCA copies texto literal de las fuentes
-2. SIEMPRE cita la fuente original al inicio del artículo
-3. Reescribe completamente con tus propias palabras
-4. Mantén un tono profesional y objetivo
-5. Escribe en español dominicano natural
-6. Optimiza para SEO y lectura web
-
-ESTRUCTURA REQUERIDA:
-- Título atractivo (máximo 70 caracteres)
-- Párrafo inicial citando la fuente
-- Desarrollo del tema (3-4 párrafos)
-- Contexto relevante para audiencia dominicana
-- Cierre con implicaciones o próximos pasos
-
-Al final SIEMPRE incluye:
----
-Fuente: [Nombre del medio]
-Fecha: [Fecha de publicación]
-"""
+def fecha_en_espanol(dt: datetime) -> str:
+    """Convierte datetime a formato '8 de abril de 2026'."""
+    return f"{dt.day} de {MESES_ES[dt.month]} de {dt.year}"
 
 
-class ArticleGenerator:
-    """Genera artículos periodísticos usando la API de Claude."""
+# ─────────────────────────────────────────────
+# PROMPT MAESTRO DE REDACCIÓN
+# ─────────────────────────────────────────────
+SYSTEM_PROMPT = """Eres el redactor principal de NeuroDiario, el medio digital más inteligente de República Dominicana. Tu escritura es clara, profesional, directa y dominicana — como un periodista senior con criterio propio.
 
-    def __init__(self, api_key: Optional[str] = None, model: str = DEFAULT_MODEL):
+INSTRUCCIONES DE REDACCIÓN:
+
+1. TITULAR: Directo e informativo. Máximo 12 palabras. Sin signos de interrogación. Sin clickbait.
+
+2. LEAD (primer párrafo): Resume el quién, qué, cuándo, dónde y por qué en 2-3 oraciones contundentes. NUNCA empieces con "Según reportó..." ni con el nombre del medio. El lead engancha al lector de inmediato.
+
+3. CUERPO DEL ARTÍCULO:
+   - Entre 450 y 650 palabras en total
+   - Usa <strong> para resaltar datos clave, nombres de personas y cifras importantes
+   - Usa <em> para términos técnicos, títulos de cargos o frases textuales breves
+   - Usa comillas «» para citas directas de personas
+   - Párrafos cortos: máximo 4 oraciones por párrafo
+   - Mínimo 4 párrafos de desarrollo
+   - Si aplica, incluye un párrafo de contexto histórico o regional
+   - Añade un subtítulo <h2> a mitad del artículo para dividir el contenido
+
+4. TONO: Neutral pero con criterio. NeuroDiario analiza, contextualiza y explica. Evita frases vacías como "cabe destacar que", "es importante mencionar" o "en ese sentido".
+
+5. LO QUE NUNCA DEBES HACER:
+   - Nunca escribir "Medio desconocido" o "Fuente desconocida"
+   - Nunca mezclar inglés y español ("06 de April" está MAL — escribe "6 de abril")
+   - Nunca comenzar el artículo con "Según reportó..."
+   - Nunca usar Markdown (#, ##, ---, **texto**) — SOLO HTML
+   - No inventes datos que no estén en la fuente original
+   - No copies texto literal de la fuente
+
+6. OUTPUT FORMAT: Devuelve SOLO el artículo en HTML limpio, listo para WordPress. Usa únicamente estas etiquetas: <p>, <strong>, <em>, <blockquote>, <h2>. SIN comentarios, SIN explicaciones, SIN texto fuera del artículo."""
+
+
+# ─────────────────────────────────────────────
+# CLIENTE PEXELS
+# ─────────────────────────────────────────────
+class PexelsClient:
+    """Busca imágenes libres de derechos en Pexels."""
+
+    BASE_URL = "https://api.pexels.com/v1/search"
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or os.getenv("PEXELS_API_KEY", "")
+
+    def search_image(self, query: str, orientation: str = "landscape") -> Optional[Dict]:
         """
+        Busca una imagen en Pexels por palabras clave.
+
         Args:
-            api_key: Clave de API de Anthropic.
-            model: ID del modelo de Claude a usar.
+            query: Palabras clave de búsqueda (ej: "economía República Dominicana")
+            orientation: "landscape" | "portrait" | "square"
+
+        Returns:
+            Dict con url, photographer, alt o None si no se encuentra
         """
+        if not self.api_key:
+            logger.warning("PEXELS_API_KEY no configurada — artículo sin imagen.")
+            return None
+
+        try:
+            headers = {"Authorization": self.api_key}
+            params = {
+                "query": query,
+                "per_page": 5,
+                "orientation": orientation,
+                "locale": "es-ES",
+            }
+            response = requests.get(self.BASE_URL, headers=headers, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            photos = data.get("photos", [])
+            if not photos:
+                # Reintento en inglés si no hay resultados en español
+                params["locale"] = "en-US"
+                response = requests.get(self.BASE_URL, headers=headers, params=params, timeout=10)
+                data = response.json()
+                photos = data.get("photos", [])
+
+            if photos:
+                photo = photos[0]
+                return {
+                    "url": photo["src"]["large2x"],
+                    "url_medium": photo["src"]["large"],
+                    "photographer": photo.get("photographer", "Pexels"),
+                    "photographer_url": photo.get("photographer_url", "https://www.pexels.com"),
+                    "alt": query,
+                    "pexels_url": photo.get("url", "https://www.pexels.com"),
+                }
+        except Exception as e:
+            logger.error(f"Error buscando imagen en Pexels: {e}")
+
+        return None
+
+    def build_image_html(self, image: Dict, caption: str = "") -> str:
+        """
+        Genera el HTML de la imagen con crédito Pexels.
+
+        Args:
+            image: Dict retornado por search_image()
+            caption: Texto del caption (opcional)
+
+        Returns:
+            HTML de la figura completa
+        """
+        cap_text = caption or image.get("alt", "")
+        credit = f'Foto: <a href="{image["photographer_url"]}" target="_blank" rel="noopener">{image["photographer"]}</a> en <a href="{image["pexels_url"]}" target="_blank" rel="noopener">Pexels</a>'
+
+        return (
+            f'<figure class="nd-featured-image">'
+            f'<img src="{image["url_medium"]}" alt="{cap_text}" loading="lazy" />'
+            f'<figcaption>{cap_text} — {credit}</figcaption>'
+            f'</figure>'
+        )
+
+
+# ─────────────────────────────────────────────
+# GENERADOR PRINCIPAL
+# ─────────────────────────────────────────────
+class ArticleGenerator:
+    """Genera artículos periodísticos usando la API de Claude + imágenes Pexels."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = DEFAULT_MODEL,
+        pexels_api_key: Optional[str] = None,
+    ):
         self.model = model
         self.client = anthropic.Anthropic(api_key=api_key)
+        self.pexels = PexelsClient(api_key=pexels_api_key)
 
+    # ─────────────────────────────────────────
+    # MÉTODO PRINCIPAL — Artículo desde una fuente
+    # ─────────────────────────────────────────
     def generate_from_single_article(
         self,
         title: str,
@@ -62,7 +176,7 @@ class ArticleGenerator:
         published_at: Optional[datetime] = None,
     ) -> Dict:
         """
-        Genera un artículo original para NeuroDiario basado en un artículo fuente.
+        Genera un artículo HTML original para NeuroDiario desde un artículo fuente.
 
         Args:
             title: Título del artículo original
@@ -73,95 +187,78 @@ class ArticleGenerator:
             published_at: Fecha de publicación original
 
         Returns:
-            Dict con title, content, excerpt, category, tags, source_citation
+            Dict con title, content (HTML completo), excerpt, category, tags,
+                  source_citation, featured_image
         """
-        # Truncar contenido si es muy largo
         content_trimmed = content[:3000] if len(content) > 3000 else content
+        fecha_str = fecha_en_espanol(published_at) if published_at else ""
+        source_display = source if source and source.lower() not in ("", "desconocido", "medio desconocido") else "fuente local"
 
-        fecha_str = ""
-        if published_at:
-            fecha_str = published_at.strftime("%d de %B, %Y")
+        prompt = f"""Redacta un artículo periodístico ORIGINAL para NeuroDiario basado en esta noticia:
 
-        prompt = f"""Redacta un artículo periodístico ORIGINAL para NeuroDiario basado en esta noticia de {source}:
+DATOS DE LA FUENTE:
+- Título original: {title}
+- Medio: {source_display}
+- Categoría: {category}
+{f'- Fecha: {fecha_str}' if fecha_str else ''}
+{f'- URL: {url}' if url else ''}
 
-ARTÍCULO FUENTE:
-Título: {title}
-Medio: {source}
-Categoría: {category}
-{f'Fecha: {fecha_str}' if fecha_str else ''}
-{f'URL: {url}' if url else ''}
-
-Contenido:
+CONTENIDO FUENTE:
 {content_trimmed}
 
-INSTRUCCIONES:
-1. Crea un título NUEVO y atractivo (máximo 70 caracteres)
-2. Primer párrafo debe mencionar: "Según reportó {source}..." o similar
-3. Reescribe COMPLETAMENTE el contenido con tus propias palabras
-4. Añade contexto relevante para lectores dominicanos
-5. Mantén objetividad periodística
-6. Al final incluye la cita de fuente en este formato exacto:
-
----
-**Fuente:** {source}
-{f'**Fecha:** {fecha_str}' if fecha_str else ''}
-{f'**Enlace:** {url}' if url else ''}
-
-Responde SOLO con el artículo completo, sin comentarios adicionales."""
+Recuerda: devuelve SOLO el artículo en HTML. Sin comentarios. Sin Markdown."""
 
         try:
-            response_text = self._call_api(prompt, max_tokens=2000)
-            
-            # Parsear respuesta
-            parsed = self._parse_generated_article(response_text, source, category)
-            
-            # Agregar metadata
-            parsed["source_citation"] = {
-                "source": source,
-                "url": url,
-                "published_at": published_at,
+            article_html = self._call_api(prompt, max_tokens=2000)
+            article_html = self._clean_html(article_html)
+
+            # Imagen desde Pexels
+            image_query = self._build_image_query(title, category)
+            image = self.pexels.search_image(image_query)
+            image_html = self.pexels.build_image_html(image, caption=title) if image else ""
+
+            # Pie de fuente profesional
+            footer_html = self._build_footer(source_display, fecha_str, url)
+
+            # Íconos compartir
+            share_html = self._build_share_icons(url or "")
+
+            # HTML completo del post
+            full_content = f"{image_html}\n{article_html}\n{footer_html}\n{share_html}"
+
+            # Título limpio
+            clean_title = self._extract_title_from_html(article_html) or self._clean_title(title)
+
+            # Excerpt
+            excerpt = self._extract_excerpt(article_html)
+
+            # Tags
+            tags = [t for t in [category, source_display, "República Dominicana", "NeuroDiario"] if t]
+
+            return {
+                "title": clean_title,
+                "content": full_content,
+                "excerpt": excerpt,
+                "category": category,
+                "tags": tags,
+                "featured_image": image,
+                "source_citation": {
+                    "source": source_display,
+                    "url": url,
+                    "published_at": published_at,
+                },
             }
-            
-            return parsed
 
         except Exception as e:
-            logger.error(f"Error generando artículo: {e}")
+            logger.error(f"Error generando artículo desde fuente única: {e}")
             raise
 
-    def generate_digest(self, trends: List[Dict]) -> str:
-        """
-        Genera un boletín diario con las principales tendencias.
-
-        Args:
-            trends: Lista de tendencias detectadas
-
-        Returns:
-            Texto del boletín
-        """
-        trends_text = "\n".join(
-            f"- {t['topic']} ({t.get('article_count', 0)} artículos)"
-            for t in trends[:5]
-        )
-        
-        prompt = f"""Redacta un boletín periodístico diario para NeuroDiario.
-
-TENDENCIAS DEL DÍA:
-{trends_text}
-
-FORMATO:
-- Título atractivo para el boletín
-- Introducción breve
-- Resumen de cada tendencia (1 párrafo cada una)
-- Cierre con perspectiva general
-
-Extensión: 400-600 palabras
-Tono: Profesional pero accesible"""
-
-        return self._call_api(prompt)
-
+    # ─────────────────────────────────────────
+    # MÉTODO — Artículo desde tendencia + múltiples fuentes
+    # ─────────────────────────────────────────
     def create_article(self, trend: Dict, articles: List[Dict]) -> Dict:
         """
-        MÉTODO ORIGINAL - Genera artículo basado en tendencia y múltiples fuentes.
+        Genera artículo basado en tendencia y múltiples fuentes.
 
         Args:
             trend: Tendencia detectada
@@ -170,38 +267,95 @@ Tono: Profesional pero accesible"""
         Returns:
             Dict con artículo estructurado
         """
-        # Limitar artículos
         articles = articles[:5]
         sources_text = self._format_sources(articles)
         topic = trend.get("topic", "")
         category = trend.get("category", "general")
 
-        # Extraer nombres de medios únicos
-        source_names = list(set(a.get("source", "Medios locales") for a in articles if a.get("source")))
-        sources_citation = ", ".join(source_names[:3])
+        source_names = list({a.get("source", "") for a in articles if a.get("source")})
+        source_names = [s for s in source_names if s.lower() not in ("", "desconocido", "medio desconocido")]
+        sources_citation = ", ".join(source_names[:3]) if source_names else "medios locales"
 
-        prompt = f"""Redacta un artículo periodístico ORIGINAL sobre '{topic}' para NeuroDiario.
+        prompt = f"""Redacta un artículo periodístico ORIGINAL sobre el tema '{topic}' para NeuroDiario.
 
 FUENTES BASE:
 {sources_text}
 
-INSTRUCCIONES:
-1. Título atractivo (máximo 70 caracteres)
-2. Primer párrafo menciona: "Según reportaron {sources_citation}..."
-3. Reescribe completamente con tus palabras
-4. Estructura: Introducción → Desarrollo → Contexto → Cierre
-5. 600-800 palabras
-6. Al final incluye:
+MEDIOS CONSULTADOS: {sources_citation}
+CATEGORÍA: {category}
 
----
-**Fuentes:** {sources_citation}
-**Categoría:** {category}
+Recuerda: devuelve SOLO el artículo en HTML. Sin comentarios. Sin Markdown."""
 
-Responde SOLO con el artículo."""
+        try:
+            article_html = self._call_api(prompt, max_tokens=2500)
+            article_html = self._clean_html(article_html)
 
-        response_text = self._call_api(prompt, max_tokens=2500)
-        return self._parse_article_response(response_text, articles)
+            # Imagen
+            image_query = self._build_image_query(topic, category)
+            image = self.pexels.search_image(image_query)
+            image_html = self.pexels.build_image_html(image, caption=topic) if image else ""
 
+            # Pie de fuente
+            fecha_str = fecha_en_espanol(datetime.now())
+            footer_html = self._build_footer(sources_citation, fecha_str, "")
+
+            # Íconos compartir
+            share_html = self._build_share_icons("")
+
+            full_content = f"{image_html}\n{article_html}\n{footer_html}\n{share_html}"
+            clean_title = self._extract_title_from_html(article_html) or topic
+            excerpt = self._extract_excerpt(article_html)
+
+            return {
+                "title": clean_title,
+                "content": full_content,
+                "excerpt": excerpt,
+                "category": category,
+                "tags": [category, "República Dominicana", "NeuroDiario"],
+                "featured_image": image,
+                "sources": [a.get("url", "") for a in articles if a.get("url")],
+            }
+
+        except Exception as e:
+            logger.error(f"Error generando artículo desde tendencia: {e}")
+            raise
+
+    # ─────────────────────────────────────────
+    # MÉTODO — Boletín diario
+    # ─────────────────────────────────────────
+    def generate_digest(self, trends: List[Dict]) -> str:
+        """
+        Genera un boletín diario con las principales tendencias.
+
+        Args:
+            trends: Lista de tendencias detectadas
+
+        Returns:
+            HTML del boletín
+        """
+        trends_text = "\n".join(
+            f"- {t['topic']} ({t.get('article_count', 0)} artículos)"
+            for t in trends[:5]
+        )
+
+        prompt = f"""Redacta un boletín periodístico diario para NeuroDiario.
+
+TENDENCIAS DEL DÍA:
+{trends_text}
+
+FORMATO HTML:
+- <h1> con título atractivo del boletín
+- <p> de introducción breve
+- Un <h2> y <p> por cada tendencia
+- <p> de cierre con perspectiva general
+
+Extensión: 400-600 palabras. Devuelve SOLO HTML."""
+
+        return self._call_api(prompt)
+
+    # ─────────────────────────────────────────
+    # UTILIDADES PRIVADAS
+    # ─────────────────────────────────────────
     def _call_api(self, user_prompt: str, max_tokens: int = 2048) -> str:
         """Llama a la API de Claude."""
         try:
@@ -216,76 +370,98 @@ Responde SOLO con el artículo."""
             logger.error(f"Error en Claude API: {e}")
             raise
 
-    def _parse_generated_article(self, response_text: str, source: str, category: str) -> Dict:
-        """
-        Parsea el artículo generado y extrae componentes.
+    def _clean_html(self, html: str) -> str:
+        """Elimina bloques de código Markdown si Claude los incluye por error."""
+        html = re.sub(r"```html?\s*", "", html)
+        html = re.sub(r"```\s*", "", html)
+        return html.strip()
 
-        Args:
-            response_text: Texto generado por Claude
-            source: Medio fuente
-            category: Categoría del artículo
+    def _clean_title(self, title: str) -> str:
+        """Limpia el título removiendo Markdown y espacios."""
+        return title.strip().lstrip("#").strip()
 
-        Returns:
-            Dict con title, content, excerpt, category, tags
-        """
-        lines = response_text.strip().split("\n")
-        
-        # Extraer título (primera línea no vacía)
-        title = ""
-        for line in lines:
-            clean_line = line.strip().lstrip("#").strip()
-            if clean_line and len(clean_line) > 10:
-                title = clean_line
-                break
-        
-        if not title:
-            title = "Artículo de NeuroDiario"
+    def _extract_title_from_html(self, html: str) -> str:
+        """Intenta extraer el primer <h1> o <h2> del HTML generado como título del post."""
+        match = re.search(r"<h[12][^>]*>(.*?)</h[12]>", html, re.IGNORECASE | re.DOTALL)
+        if match:
+            raw = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+            # Si el h1/h2 está en el cuerpo, lo removemos para que el título no se duplique
+            return raw
+        return ""
 
-        # Contenido completo
-        content = response_text.strip()
+    def _extract_excerpt(self, html: str) -> str:
+        """Extrae el primer párrafo como excerpt."""
+        match = re.search(r"<p[^>]*>(.*?)</p>", html, re.IGNORECASE | re.DOTALL)
+        if match:
+            text = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+            return (text[:200] + "...") if len(text) > 200 else text
+        return ""
 
-        # Extracto (primeras 2-3 oraciones)
-        sentences = re.split(r"(?<=[.!?])\s+", content)
-        excerpt = " ".join(sentences[:3]) if len(sentences) >= 3 else sentences[0] if sentences else ""
-        excerpt = excerpt[:200] + "..." if len(excerpt) > 200 else excerpt
-
-        # Tags básicos basados en categoría
-        tags = [category, source, "República Dominicana"]
-
-        return {
-            "title": title,
-            "content": content,
-            "excerpt": excerpt,
-            "category": category,
-            "tags": tags,
+    def _build_image_query(self, title: str, category: str) -> str:
+        """Construye la query de búsqueda para Pexels."""
+        # Palabras clave por categoría
+        category_keywords = {
+            "politica": "politics government",
+            "política": "politics government",
+            "economia": "economy business",
+            "economía": "economy business finance",
+            "deportes": "sports Dominican Republic",
+            "internacional": "world international news",
+            "tecnologia": "technology innovation",
+            "tecnología": "technology innovation",
+            "sociedad": "community society people",
+            "salud": "health medicine",
+            "cultura": "culture arts",
         }
+        cat_key = category_keywords.get(category.lower(), "Dominican Republic")
 
-    def _parse_article_response(self, response_text: str, articles: List[Dict]) -> Dict:
-        """MÉTODO ORIGINAL - Parsea respuesta estructurada."""
-        sources = [a.get("url", "") for a in articles if a.get("url")]
-        
-        # Intentar extraer título
-        lines = [line for line in response_text.strip().splitlines() if line.strip()]
-        title = lines[0].lstrip("#").strip() if lines else "Sin título"
+        # Usar las primeras 4 palabras del título + categoría
+        title_words = " ".join(title.split()[:4])
+        return f"{title_words} {cat_key}"
 
-        # Extracto
-        sentences = re.split(r"(?<=[.!?])\s+", response_text.strip())
-        summary = " ".join(sentences[:2]).strip() if sentences else response_text[:200]
+    def _build_footer(self, source: str, fecha: str, url: str) -> str:
+        """Genera el pie de fuente en HTML profesional."""
+        url_html = f'<a href="{url}" target="_blank" rel="noopener noreferrer">Ver nota original</a>' if url else ""
+        parts = [
+            '<div class="nd-source-footer">',
+            f'<span class="nd-source-label">Fuente:</span> <span class="nd-source-name">{source}</span>',
+        ]
+        if fecha:
+            parts.append(f'<span class="nd-source-date"> · {fecha}</span>')
+        if url_html:
+            parts.append(f'<span class="nd-source-link"> · {url_html}</span>')
+        parts.append('</div>')
+        return "\n".join(parts)
 
-        return {
-            "title": title,
-            "summary": summary,
-            "content": response_text.strip(),
-            "sources": sources,
-        }
+    def _build_share_icons(self, article_url: str) -> str:
+        """Genera íconos de compartir para redes sociales."""
+        encoded_url = requests.utils.quote(article_url, safe="") if article_url else ""
+        return f"""<div class="nd-share-bar">
+  <span class="nd-share-label">Compartir:</span>
+  <a class="nd-share-btn nd-share-facebook" href="https://www.facebook.com/sharer/sharer.php?u={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en Facebook">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg> Facebook
+  </a>
+  <a class="nd-share-btn nd-share-twitter" href="https://twitter.com/intent/tweet?url={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en X/Twitter">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4l16 16M4 20L20 4"/><path d="M4 4l16 16M4 20L20 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> X / Twitter
+  </a>
+  <a class="nd-share-btn nd-share-whatsapp" href="https://wa.me/?text={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en WhatsApp">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg> WhatsApp
+  </a>
+  <a class="nd-share-btn nd-share-rss" href="/feed" target="_blank" rel="noopener" aria-label="RSS Feed">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg> RSS
+  </a>
+</div>"""
 
     def _format_sources(self, articles: List[Dict]) -> str:
         """Formatea artículos como texto para el prompt."""
         parts = []
         for i, article in enumerate(articles[:5], 1):
+            source = article.get("source", "")
+            if not source or source.lower() in ("desconocido", "medio desconocido"):
+                source = "fuente local"
             parts.append(
                 f"[Fuente {i}] {article.get('title', 'Sin título')}\n"
-                f"Medio: {article.get('source', 'Desconocido')}\n"
+                f"Medio: {source}\n"
                 f"URL: {article.get('url', '')}\n"
                 f"Contenido: {article.get('raw_content', '')[:500]}..."
             )
