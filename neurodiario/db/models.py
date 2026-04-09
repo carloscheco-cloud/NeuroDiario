@@ -56,6 +56,7 @@ class Article(Base):
     raw_content = Column(Text, default="")
     clean_content = Column(Text, default="")
     word_count = Column(Integer, default=0)
+    image_url = Column(String(1000), nullable=True)  # ← NUEVO
 
     # Metadatos de clasificación NLP
     category = Column(String(100), default="general")
