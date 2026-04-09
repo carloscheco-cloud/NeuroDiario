@@ -72,7 +72,7 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.add_job(
         _job_ingestion,
         trigger="interval",
-        minutes=15,
+        minutes=3,
         id="ingestion_rss",
         name="Ingesta RSS",
         replace_existing=True,
@@ -81,7 +81,7 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.add_job(
         _job_nlp,
         trigger="interval",
-        minutes=20,
+        minutes=6,
         id="nlp_pipeline",
         name="Pipeline NLP",
         replace_existing=True,
@@ -90,7 +90,7 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.add_job(
         _job_publishing,
         trigger="interval",
-        minutes=30,
+        minutes=8,
         id="publishing_pipeline",
         name="Generación y Publicación",
         replace_existing=True,
