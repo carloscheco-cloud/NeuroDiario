@@ -1,6 +1,6 @@
 """
-Módulo de clasificación temática de artículos.
-Asigna categorías (política, economía, deportes, etc.) a cada artículo.
+Modulo de clasificacion tematica de articulos.
+Asigna categorias (politica, economia, deportes, etc.) a cada articulo.
 """
 
 import logging
@@ -8,97 +8,100 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Palabras clave por categoría para clasificación heurística
+# ─────────────────────────────────────────────────────────────
+# PALABRAS CLAVE POR CATEGORIA
+# Mas especificas para evitar colisiones entre categorias
+# El titulo pesa el doble que el cuerpo
+# ─────────────────────────────────────────────────────────────
 CATEGORY_KEYWORDS: Dict[str, List[str]] = {
     "politica": [
-        "gobierno", "presidente", "congreso", "senado", "diputado", "partido",
-        "elecciones", "ministro", "decreto", "ley", "constitución", "abinader",
+        "gobierno", "presidente", "congreso", "senado", "diputado",
+        "partido politico", "elecciones", "ministro", "decreto", "ley",
+        "constitución", "abinader", "legislativo", "ejecutivo", "judicial",
+        "gobernador", "alcalde", "ayuntamiento", "procurador", "fiscal",
+        "poder ejecutivo", "poder legislativo", "poder judicial",
+        "pld", "prm", "fuerza del pueblo", "reforma", "politica dominicana",
+        "canciller", "cancillería", "diplomacia dominicana",
     ],
     "economia": [
-        "economía", "peso", "dólar", "inflación", "PIB", "banco", "inversión",
-        "exportaciones", "importaciones", "empleo", "desempleo", "hacienda",
+        "economía dominicana", "peso dominicano", "dólar", "inflación",
+        "pib dominicano", "banco central", "inversión extranjera",
+        "exportaciones dominicanas", "importaciones", "empleo dominicano",
+        "desempleo", "hacienda", "presupuesto nacional", "deuda publica",
+        "zona franca", "turismo dominicano", "remesas", "tipo de cambio",
+        "banreservas", "popular", "bhd", "reservas internacionales",
+        "crecimiento económico", "recaudaciones", "dgii", "aduanas",
     ],
     "deportes": [
-        "béisbol", "fútbol", "jugador", "equipo", "torneo", "campeonato",
-        "liga", "gol", "partido", "deporte", "atleta", "medalla",
-        "mlb", "beisbol", "baseball", "lidom", "clásico mundial",
-        "clasico mundial", "home run", "pitcher", "lanzador", "bateador",
-        "yankees", "dodgers", "medias rojas", "padres", "astros", "toronto",
+        "béisbol dominicano", "lidom", "grandes ligas", "mlb",
+        "pelotero dominicano", "home run", "pitcher", "lanzador", "bateador",
+        "yankees", "dodgers", "medias rojas", "padres", "astros",
+        "clásico mundial", "clasico mundial", "licey", "escogido",
+        "águilas cibaeñas", "estrellas orientales", "toros del este",
+        "baloncesto dominicano", "lnb", "atletismo dominicano",
+        "boxeo", "campeón mundial", "campeonato dominicano",
+        "futbol dominicano", "selección dominicana", "deporte dominicano",
     ],
     "salud": [
-        "salud", "hospital", "médico", "enfermedad", "vacuna", "paciente",
-        "ministerio de salud", "epidemia", "dengue", "covid", "tratamiento",
+        "salud dominicana", "hospital dominicano", "médico", "enfermedad",
+        "vacuna", "paciente", "ministerio de salud", "epidemia", "dengue",
+        "covid", "tratamiento médico", "sns", "seguro médico", "idss",
+        "aborto", "maternidad", "salud publica", "farmacia", "medicamento",
     ],
     "tecnologia": [
-        "tecnología", "internet", "digital", "software", "app", "startup",
-        "inteligencia artificial", "ciberseguridad", "datos", "innovación",
+        "tecnología", "internet dominicano", "digital", "software",
+        "aplicacion", "startup dominicana", "inteligencia artificial",
+        "ciberseguridad", "datos", "innovación tecnológica",
+        "indotel", "telecomunicaciones", "banda ancha", "fibra optica",
     ],
     "cultura": [
-        "cultura", "arte", "música", "cine", "teatro", "festival", "libro",
-        "literatura", "merengue", "bachata", "patrimonio", "artista",
+        "cultura dominicana", "arte dominicano", "música dominicana",
+        "cine dominicano", "teatro dominicano", "festival dominicano",
+        "literatura dominicana", "merengue", "bachata", "patrimonio dominicano",
+        "artista dominicano", "carnaval dominicano", "gastronomia dominicana",
+        "cultura popular", "folclore dominicano",
     ],
     "educacion": [
-        "educación", "escuela", "universidad", "estudiante", "docente",
-        "MINERD", "maestro", "aula", "currículo", "beca", "UASD",
+        "educación dominicana", "escuela dominicana", "universidad dominicana",
+        "estudiante", "docente dominicano", "minerd", "maestro dominicano",
+        "aula", "currículo", "beca dominicana", "uasd", "pucmm", "intec",
+        "año escolar", "tanda extendida", "jornada escolar",
     ],
     "internacional": [
-        "internacional", "Estados Unidos", "ONU", "OEA", "Haití", "Venezuela",
-        "Colombia", "España", "mundo", "global", "diplomacia", "embajada",
+        "guerra", "conflicto armado", "bombardeo", "ataque militar",
+        "iran", "israel", "ucrania", "rusia", "oriente proximo", "medio oriente",
+        "onu", "oea", "otan", "biden", "trump", "xi jinping",
+        "haiti", "venezuela", "cuba", "colombia", "mexico", "argentina",
+        "estados unidos", "europa", "asia", "africa",
+        "refugiados", "paz", "tratado internacional", "cumbre mundial",
+        "banco mundial", "fmi", "g20", "g7",
+    ],
+    "sociedad": [
+        "crimen", "homicidio", "robo", "seguridad ciudadana",
+        "feminicidio", "violencia", "accidente", "catástrofe",
+        "inundación dominicana", "damnificados", "coe", "defensa civil",
+        "comunidad dominicana", "barrio", "pobreza", "desigualdad",
+        "migracion dominicana", "deportados", "haitiano en rd",
     ],
 }
 
 
 class ArticleClassifier:
-    """Clasifica artículos de noticias por temática."""
+    """Clasifica articulos de noticias por tematica."""
 
     def __init__(self, method: str = "keyword"):
-        """
-        Args:
-            method: Método de clasificación. Valores posibles:
-                    - 'keyword': Heurístico por palabras clave (rápido, sin dependencias).
-                    - 'ml': Modelo de machine learning (requiere entrenamiento previo).
-        """
         self.method = method
-        self._model = None  # Para uso futuro con método 'ml'
+        self._model = None
 
     def classify(self, text: str, title: str = "") -> Tuple[str, float]:
-        """
-        Clasifica un artículo y devuelve la categoría con su confianza.
-
-        Args:
-            text: Contenido del artículo.
-            title: Título del artículo (tiene peso mayor en la clasificación).
-
-        Returns:
-            Tupla (categoría, confianza) donde confianza está en [0, 1].
-        """
         if self.method == "keyword":
             return self._classify_by_keywords(text, title)
-        raise NotImplementedError(f"Método '{self.method}' no implementado aún")
+        raise NotImplementedError(f"Metodo '{self.method}' no implementado aun")
 
     def classify_article(self, title: str, content: str) -> Tuple[str, float]:
-        """
-        Clasifica un artículo dado su título y contenido.
-
-        Args:
-            title: Título del artículo.
-            content: Contenido o cuerpo del artículo.
-
-        Returns:
-            Tupla (categoría, confianza) donde confianza está en [0, 1].
-        """
         return self.classify(text=content, title=title)
 
     def classify_batch(self, articles: List[Dict]) -> List[Dict]:
-        """
-        Clasifica una lista de artículos y añade 'category' y 'category_confidence'.
-
-        Args:
-            articles: Lista de artículos con claves 'raw_content' y 'title'.
-
-        Returns:
-            Lista de artículos con las claves de clasificación añadidas.
-        """
         for article in articles:
             category, confidence = self.classify(
                 article.get("raw_content", ""),
@@ -110,14 +113,22 @@ class ArticleClassifier:
 
     def _classify_by_keywords(self, text: str, title: str) -> Tuple[str, float]:
         """
-        Clasifica usando conteo de palabras clave por categoría.
-        El título pesa el doble que el cuerpo del artículo.
+        Clasifica usando conteo de palabras clave por categoria.
+        El titulo pesa 3 veces mas que el cuerpo para mayor precision.
+        Las frases de dos palabras tienen mas peso que palabras sueltas.
         """
-        combined = f"{title} {title} {text}".lower()
+        # Titulo tiene peso x3 para mayor precision
+        combined = f"{title} {title} {title} {text}".lower()
         scores: Dict[str, int] = {}
 
         for category, keywords in CATEGORY_KEYWORDS.items():
-            scores[category] = sum(combined.count(kw.lower()) for kw in keywords)
+            score = 0
+            for kw in keywords:
+                count = combined.count(kw.lower())
+                # Frases de mas de una palabra tienen peso doble
+                weight = 2 if len(kw.split()) > 1 else 1
+                score += count * weight
+            scores[category] = score
 
         if not any(scores.values()):
             return "general", 0.0
