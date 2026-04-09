@@ -7,7 +7,7 @@ import logging
 import re
 import os
 import requests
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 import anthropic
@@ -70,15 +70,6 @@ class SerperImageClient:
         self.api_key = api_key or os.getenv("SERPER_API_KEY", "")
 
     def search_image(self, query: str) -> Optional[Dict]:
-        """
-        Busca una imagen en Google Images via Serper.dev.
-
-        Args:
-            query: Palabras clave de busqueda
-
-        Returns:
-            Dict con url, source, alt o None si no encuentra
-        """
         if not self.api_key:
             logger.warning("SERPER_API_KEY no configurada.")
             return None
@@ -91,8 +82,8 @@ class SerperImageClient:
             payload = {
                 "q": query,
                 "num": 5,
-                "gl": "do",  # Geolocation: Republica Dominicana
-                "hl": "es",  # Language: espanol
+                "gl": "do",
+                "hl": "es",
             }
             response = requests.post(
                 self.BASE_URL,
@@ -105,7 +96,6 @@ class SerperImageClient:
 
             images = data.get("images", [])
             if images:
-                # Buscar la primera imagen con URL valida y accesible
                 for img in images[:5]:
                     image_url = img.get("imageUrl", "")
                     if image_url and image_url.startswith("http"):
@@ -206,7 +196,6 @@ class ArticleGenerator:
         model: str = DEFAULT_MODEL,
         pexels_api_key: Optional[str] = None,
         serper_api_key: Optional[str] = None,
-        # Mantener compatibilidad con parametros anteriores de Google
         google_api_key: Optional[str] = None,
         google_cse_id: Optional[str] = None,
     ):
@@ -216,8 +205,12 @@ class ArticleGenerator:
         self.pexels = PexelsClient(api_key=pexels_api_key)
 
     def _get_image(self, query: str, caption: str) -> str:
-        """Serper primero, Pexels como fallback."""
-        # Dominios bloqueados que no cargan bien en WordPress
+        """Serper primero, Pexels como fallback. Retorna solo HTML."""
+        _, image_html = self._get_image_with_url(query, caption)
+        return image_html
+
+    def _get_image_with_url(self, query: str, caption: str) -> Tuple[Optional[str], str]:
+        """Serper primero, Pexels como fallback. Retorna (url, html)."""
         BLOCKED_DOMAINS = [
             "fbsbx.com",
             "lookaside.facebook.com",
@@ -234,18 +227,19 @@ class ArticleGenerator:
             url = image.get("url", "")
             if not any(domain in url for domain in BLOCKED_DOMAINS):
                 logger.info(f"  Imagen de Serper/Google: {url[:60]}...")
-                return self.serper.build_image_html(image, caption=caption)
+                return url, self.serper.build_image_html(image, caption=caption)
             else:
                 logger.info(f"  Imagen bloqueada ({url[:40]}...), intentando Pexels...")
 
         logger.info("  Serper sin resultados validos, intentando Pexels...")
         image = self.pexels.search_image(query)
         if image:
-            logger.info(f"  Imagen de Pexels: {image['url_medium'][:60]}...")
-            return self.pexels.build_image_html(image, caption=caption)
+            url = image.get("url_medium", "")
+            logger.info(f"  Imagen de Pexels: {url[:60]}...")
+            return url, self.pexels.build_image_html(image, caption=caption)
 
         logger.warning("  No se encontro imagen.")
-        return ""
+        return None, ""
 
     def generate_from_single_article(
         self,
@@ -284,7 +278,7 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._remove_h1_from_html(article_html)
 
             image_query = self._build_image_query(title, category)
-            image_html = self._get_image(image_query, caption=title)
+            image_url, image_html = self._get_image_with_url(image_query, caption=title)  # ← NUEVO
 
             footer_html = self._build_footer(source_display, fecha_str, url)
             share_url = wordpress_url if wordpress_url else url
@@ -301,6 +295,7 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
                 "excerpt": excerpt,
                 "category": category,
                 "tags": tags,
+                "image_url": image_url,  # ← NUEVO
                 "source_citation": {
                     "source": source_display,
                     "url": url,
@@ -401,7 +396,6 @@ Extension: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
         return ""
 
     def _build_image_query(self, title: str, category: str) -> str:
-        """Claude genera una query visual inteligente para Serper/Google Images."""
         category_fallbacks = {
             "politica":      "gobierno Republica Dominicana politica",
             "economia":      "economia negocios finanzas dominicana",
