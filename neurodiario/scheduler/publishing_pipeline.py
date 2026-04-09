@@ -50,11 +50,9 @@ class PublishingPipeline:
         from neurodiario.db.database import get_db
         from neurodiario.db.models import Article, GeneratedArticle
         from sqlalchemy.orm import joinedload
-        from sqlalchemy import not_, exists
 
         try:
             with get_db() as db:
-                # Subconsulta: IDs de artículos que ya tienen un GeneratedArticle publicado o en draft
                 already_published = (
                     db.query(GeneratedArticle.source_article_id)
                     .filter(
@@ -70,7 +68,7 @@ class PublishingPipeline:
                     .filter(
                         Article.processed == True,        # noqa: E712
                         Article.category != None,         # noqa: E711
-                        ~Article.id.in_(already_published),  # NO publicados aún
+                        ~Article.id.in_(already_published),
                     )
                     .order_by(Article.fetched_at.desc())
                     .limit(limit)
@@ -89,6 +87,7 @@ class PublishingPipeline:
                         "url": a.url,
                         "source": a.source.name if a.source else "fuente local",
                         "published_at": a.published_at,
+                        "image_url": a.image_url,  # ← NUEVO
                     })
 
                 logger.info(f"Artículos disponibles para publicar: {len(articles)}")
@@ -110,7 +109,6 @@ class PublishingPipeline:
         logger.info(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 70)
 
-        # PASO 1: Obtener artículos NO publicados aún
         logger.info("\n[PASO 1] Obteniendo artículos pendientes...")
         articles = self.get_articles_to_publish(limit=max_articles)
 
@@ -120,7 +118,6 @@ class PublishingPipeline:
 
         logger.info(f"Artículos a procesar: {len(articles)}")
 
-        # PASO 2: Generar y publicar cada artículo
         logger.info("\n[PASO 2] Generando y publicando artículos...")
         published_count = 0
 
@@ -129,15 +126,13 @@ class PublishingPipeline:
                 logger.info(f"\n--- Artículo {i}/{len(articles)} ---")
                 logger.info(f"Título: {article['title'][:70]}")
                 logger.info(f"Fuente: {article['source']} | Categoría: {article['category']}")
+                logger.info(f"Imagen: {article.get('image_url') or 'sin imagen'}")  # ← NUEVO
 
-                # IMPORTANTE: Registrar en BD ANTES de generar para evitar
-                # que otro ciclo concurrente tome el mismo artículo
                 generated_record_id = self._reserve_article(article['id'])
                 if not generated_record_id:
                     logger.warning(f"  ⚠ No se pudo reservar artículo {article['id']} — saltando")
                     continue
 
-                # Generar artículo con Claude (sin wordpress_url aún — se actualiza después)
                 logger.info("  → Generando con Claude AI...")
                 generated = self.generator.generate_from_single_article(
                     title=article['title'],
@@ -146,35 +141,31 @@ class PublishingPipeline:
                     category=article['category'],
                     url=article['url'],
                     published_at=article['published_at'],
-                    wordpress_url="",  # Se actualizará tras publicar
+                    wordpress_url="",
                 )
                 logger.info(f"  ✓ Generado: {generated['title'][:60]}")
 
-                # Preparar para WordPress
                 wp_article = {
                     "title": generated['title'],
                     "content": generated['content'],
                     "categories": [generated['category'].title()],
                     "tags": generated.get('tags', []),
                     "status": "draft",
+                    "image_url": article.get('image_url'),  # ← NUEVO
                 }
 
-                # Publicar en WordPress
                 logger.info("  → Publicando en WordPress...")
                 post_id = self.publisher.publish(wp_article)
 
                 if post_id:
-                    # Construir URL real del post en NeuroDiario
                     wp_base = self.settings.WORDPRESS_URL.rstrip('/')
                     wordpress_url = f"{wp_base}/?p={post_id}"
                     logger.info(f"  ✓ PUBLICADO — WordPress ID: {post_id} | URL: {wordpress_url}")
 
-                    # Actualizar botones compartir con URL real de NeuroDiario
                     final_content = self.generator._replace_share_url(
                         generated['content'], wordpress_url
                     )
 
-                    # Actualizar el post en WordPress con el contenido correcto
                     self.publisher.update_post_content(post_id, final_content)
 
                     self._mark_as_published(
@@ -201,19 +192,11 @@ class PublishingPipeline:
         return published_count
 
     def _reserve_article(self, article_id: int) -> Optional[int]:
-        """
-        Crea un registro GeneratedArticle en estado 'processing' para
-        reservar el artículo y evitar duplicados en ciclos concurrentes.
-
-        Returns:
-            ID del GeneratedArticle creado, o None si ya estaba reservado
-        """
         from neurodiario.db.database import get_db
         from neurodiario.db.models import GeneratedArticle
 
         try:
             with get_db() as db:
-                # Verificar que no exista ya un registro para este artículo
                 existing = db.query(GeneratedArticle).filter(
                     GeneratedArticle.source_article_id == article_id,
                     GeneratedArticle.status.in_(["processing", "draft", "published"])
@@ -223,7 +206,6 @@ class PublishingPipeline:
                     logger.debug(f"Artículo {article_id} ya reservado (GeneratedArticle {existing.id})")
                     return None
 
-                # Crear registro de reserva
                 record = GeneratedArticle(
                     title="[generando...]",
                     content="",
@@ -251,7 +233,6 @@ class PublishingPipeline:
         category: str,
         tags: list,
     ) -> None:
-        """Actualiza el GeneratedArticle con el resultado exitoso."""
         from neurodiario.db.database import get_db
         from neurodiario.db.models import GeneratedArticle
 
@@ -276,7 +257,6 @@ class PublishingPipeline:
             logger.error(f"Error marcando artículo como publicado: {e}")
 
     def _mark_as_failed(self, generated_record_id: int) -> None:
-        """Marca el GeneratedArticle como fallido para que pueda reintentarse."""
         from neurodiario.db.database import get_db
         from neurodiario.db.models import GeneratedArticle
 
