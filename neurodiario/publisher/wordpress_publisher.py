@@ -31,6 +31,48 @@ class WordPressPublisher:
         logger.info(f"Usuario: {username}")
         logger.info("=" * 70)
 
+    def _upload_image(self, image_url: str, title: str) -> Optional[int]:
+        """Descarga una imagen y la sube a WordPress Media Library."""
+        try:
+            response = requests.get(
+                image_url,
+                timeout=15,
+                headers={"User-Agent": "NeuroDiario/1.0"}
+            )
+            response.raise_for_status()
+
+            content_type = response.headers.get('Content-Type', 'image/jpeg').split(';')[0]
+            ext = {
+                'image/jpeg': 'jpg',
+                'image/png': 'png',
+                'image/webp': 'webp'
+            }.get(content_type, 'jpg')
+
+            filename = f"neurodiario-{title[:40].replace(' ', '-').lower()}.{ext}"
+
+            media_response = requests.post(
+                f"{self.api_url}/media",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                    "Content-Type": content_type,
+                },
+                data=response.content,
+                auth=self.auth,
+                timeout=30
+            )
+
+            if media_response.status_code == 201:
+                media_id = media_response.json()['id']
+                logger.info(f"Imagen subida a WordPress — Media ID: {media_id}")
+                return media_id
+            else:
+                logger.warning(f"Error subiendo imagen: {media_response.status_code} — {media_response.text[:200]}")
+                return None
+
+        except Exception as e:
+            logger.warning(f"No se pudo subir imagen desde {image_url}: {e}")
+            return None
+
     def publish(self, article: Dict) -> Optional[int]:
         """
         Publica un articulo en WordPress como borrador.
@@ -51,6 +93,12 @@ class WordPressPublisher:
                 logger.info(f"Procesando tags: {article['tags']}")
                 tag_ids = self._get_or_create_tags(article['tags'])
 
+            # Subir imagen destacada si existe  ← NUEVO
+            featured_media_id = None
+            if article.get('image_url'):
+                logger.info(f"  → Subiendo imagen destacada...")
+                featured_media_id = self._upload_image(article['image_url'], article['title'])
+
             post_data = {
                 'title': article['title'],
                 'content': article['content'],
@@ -58,6 +106,11 @@ class WordPressPublisher:
                 'categories': category_ids,
                 'tags': tag_ids,
             }
+
+            # Asignar imagen destacada si se subió correctamente  ← NUEVO
+            if featured_media_id:
+                post_data['featured_media'] = featured_media_id
+                logger.info(f"  ✓ Imagen destacada asignada — Media ID: {featured_media_id}")
 
             logger.info(f"Enviando POST a: {self.api_url}/posts")
 
@@ -88,15 +141,6 @@ class WordPressPublisher:
     def update_post_content(self, post_id: int, content: str) -> bool:
         """
         Actualiza el contenido de un post ya publicado en WordPress.
-        Se usa para inyectar la URL correcta de NeuroDiario en los botones
-        de compartir despues de conocer el post_id.
-
-        Args:
-            post_id: ID del post en WordPress
-            content: Contenido HTML actualizado con la URL correcta
-
-        Returns:
-            True si se actualizo correctamente, False si falla
         """
         try:
             response = requests.post(
