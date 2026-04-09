@@ -497,3 +497,82 @@ EJEMPLOS:
                 f"Contenido: {article.get('raw_content', '')[:500]}..."
             )
         return "\n\n".join(parts)
+icano campeones
+"Trump critica a la OTAN" → Donald Trump Casa Blanca conferencia prensa"""
+
+            query = self._call_api(prompt, max_tokens=30).strip()
+            query = query.split("\n")[0].strip().strip('"').strip("'").strip(".")
+            if 3 <= len(query) <= 100:
+                return query
+            return fallback
+        except Exception as e:
+            logger.warning(f"Error generando query de imagen: {e}")
+            return fallback
+
+    def _build_footer(self, source: str, fecha: str, url: str) -> str:
+        url_html = (
+            f'<a href="{url}" target="_blank" rel="noopener noreferrer">Ver nota original</a>'
+            if url else ""
+        )
+        parts = [
+            '<div class="nd-source-footer">',
+            f'<span class="nd-source-label">Fuente:</span> <span class="nd-source-name">{source}</span>',
+        ]
+        if fecha:
+            parts.append(f'<span class="nd-source-date"> · {fecha}</span>')
+        if url_html:
+            parts.append(f'<span class="nd-source-link"> · {url_html}</span>')
+        parts.append('</div>')
+        return "\n".join(parts)
+
+    def _build_share_icons(self, share_url: str) -> str:
+        """
+        FIX: share_url debe ser la URL del post en NeuroDiario,
+        no la URL de la fuente original.
+        """
+        encoded_url = requests.utils.quote(share_url, safe="") if share_url else ""
+
+        icon_facebook = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#1877F2" d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.97h-1.513c-1.491 0-1.956.93-1.956 1.884v2.25h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg>'
+        icon_x = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#000000" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.737-8.835L1.254 2.25H8.08l4.253 5.622 5.911-5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>'
+        icon_whatsapp = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#25D366" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>'
+        icon_rss = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#F26522" d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19.01 7.38 20 6.18 20C4.98 20 4 19.01 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>'
+
+        base_style = "display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;margin:0 4px;text-decoration:none;"
+        return (
+            f'<div style="display:flex;align-items:center;gap:4px;margin:20px 0;padding:12px 0;border-top:1px solid #e5e5e5;">'
+            f'<span style="font-size:13px;color:#666;margin-right:8px;font-family:sans-serif;">Compartir:</span>'
+            f'<a href="https://www.facebook.com/sharer/sharer.php?u={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en Facebook" style="{base_style}background:#e8f0fe;">{icon_facebook}</a>'
+            f'<a href="https://twitter.com/intent/tweet?url={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en X" style="{base_style}background:#f0f0f0;">{icon_x}</a>'
+            f'<a href="https://wa.me/?text={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en WhatsApp" style="{base_style}background:#e8f8ee;">{icon_whatsapp}</a>'
+            f'<a href="/feed" target="_blank" rel="noopener" aria-label="RSS Feed" style="{base_style}background:#fff3eb;">{icon_rss}</a>'
+            f'</div>'
+        )
+
+    def _format_sources(self, articles: List[Dict]) -> str:
+        parts = []
+        for i, article in enumerate(articles[:5], 1):
+            source = article.get("source", "")
+            if not source or source.lower() in ("desconocido", "medio desconocido"):
+                source = "fuente local"
+            parts.append(
+                f"[Fuente {i}] {article.get('title', 'Sin título')}\n"
+                f"Medio: {source}\n"
+                f"URL: {article.get('url', '')}\n"
+                f"Contenido: {article.get('raw_content', '')[:500]}..."
+            )
+        return "\n\n".join(parts)
+
+    def _replace_share_url(self, content: str, wordpress_url: str) -> str:
+        """
+        Reemplaza la URL en los botones de compartir con la URL real de WordPress.
+        Se llama después de publicar cuando ya tenemos el post_id.
+        """
+        encoded = requests.utils.quote(wordpress_url, safe="")
+        # Reemplazar URLs vacías o de fuente con la URL de NeuroDiario
+        import re
+        content = re.sub(
+            r'(sharer\.php\?u=|intent/tweet\?url=|wa\.me/\?text=)[^"]*',
+            lambda m: m.group(1) + encoded,
+            content
+        )
+        return content
