@@ -1,7 +1,6 @@
 """
 Modulo generador de articulos periodisticos - NeuroDiario
-Genera articulos originales con formato HTML profesional.
-Imagenes: Google Custom Search (principal) -> Pexels (fallback)
+Imagenes: Serper.dev (Google Images real) -> Pexels (fallback)
 """
 
 import logging
@@ -59,52 +58,75 @@ INSTRUCCIONES DE REDACCION:
 6. OUTPUT FORMAT: Devuelve SOLO el cuerpo del articulo en HTML limpio. NO incluyas <h1> en ninguna parte. Usa unicamente: <p>, <strong>, <em>, <blockquote>, <h2>. SIN comentarios, SIN explicaciones, SIN texto fuera del articulo."""
 
 
-class GoogleImageClient:
-    """Busca imagenes usando Google Custom Search API."""
+# ─────────────────────────────────────────────
+# CLIENTE SERPER.DEV (PRINCIPAL - Google Images real)
+# ─────────────────────────────────────────────
+class SerperImageClient:
+    """Busca imagenes usando Serper.dev - acceso real a Google Images."""
 
-    BASE_URL = "https://www.googleapis.com/customsearch/v1"
+    BASE_URL = "https://google.serper.dev/images"
 
-    def __init__(self, api_key: Optional[str] = None, cse_id: Optional[str] = None):
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY", "")
-        self.cse_id = cse_id or os.getenv("GOOGLE_CSE_ID", "")
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or os.getenv("SERPER_API_KEY", "")
 
     def search_image(self, query: str) -> Optional[Dict]:
-        if not self.api_key or not self.cse_id:
-            logger.warning("GOOGLE_API_KEY o GOOGLE_CSE_ID no configurados.")
+        """
+        Busca una imagen en Google Images via Serper.dev.
+
+        Args:
+            query: Palabras clave de busqueda
+
+        Returns:
+            Dict con url, source, alt o None si no encuentra
+        """
+        if not self.api_key:
+            logger.warning("SERPER_API_KEY no configurada.")
             return None
+
         try:
-            params = {
-                "key": self.api_key,
-                "cx": self.cse_id,
-                "q": query,
-                "searchType": "image",
-                "num": 5,
-                "imgSize": "large",
-                "imgType": "photo",
-                "safe": "active",
+            headers = {
+                "X-API-KEY": self.api_key,
+                "Content-Type": "application/json",
             }
-            response = requests.get(self.BASE_URL, params=params, timeout=10)
+            payload = {
+                "q": query,
+                "num": 5,
+                "gl": "do",  # Geolocation: Republica Dominicana
+                "hl": "es",  # Language: espanol
+            }
+            response = requests.post(
+                self.BASE_URL,
+                headers=headers,
+                json=payload,
+                timeout=10
+            )
             response.raise_for_status()
             data = response.json()
-            items = data.get("items", [])
-            if items:
-                item = items[0]
-                return {
-                    "url": item["link"],
-                    "url_medium": item.get("image", {}).get("thumbnailLink", item["link"]),
-                    "source": item.get("displayLink", "Google"),
-                    "source_url": item.get("image", {}).get("contextLink", ""),
-                    "alt": query,
-                    "provider": "google",
-                }
+
+            images = data.get("images", [])
+            if images:
+                # Buscar la primera imagen con URL valida y accesible
+                for img in images[:5]:
+                    image_url = img.get("imageUrl", "")
+                    if image_url and image_url.startswith("http"):
+                        return {
+                            "url": image_url,
+                            "url_medium": image_url,
+                            "source": img.get("source", "Google Images"),
+                            "source_url": img.get("link", ""),
+                            "alt": query,
+                            "provider": "serper",
+                            "title": img.get("title", ""),
+                        }
         except Exception as e:
-            logger.error(f"Error buscando imagen en Google: {e}")
+            logger.error(f"Error buscando imagen en Serper: {e}")
+
         return None
 
     def build_image_html(self, image: Dict, caption: str = "") -> str:
-        cap_text = caption or image.get("alt", "")
+        cap_text = caption or image.get("title") or image.get("alt", "")
         source_url = image.get("source_url", "")
-        source_name = image.get("source", "")
+        source_name = image.get("source", "Google Images")
         credit = (
             f'Imagen via <a href="{source_url}" target="_blank" rel="noopener">{source_name}</a>'
             if source_url else f"Imagen: {source_name}"
@@ -112,15 +134,19 @@ class GoogleImageClient:
         return (
             f'<figure class="nd-featured-image" style="margin:0 0 24px 0;padding:0;">'
             f'<img src="{image["url"]}" alt="{cap_text}" loading="lazy" '
-            f'style="width:100%;max-width:680px;height:360px;object-fit:cover;display:block;border-radius:6px;" />'
+            f'style="width:100%;max-width:680px;height:360px;object-fit:cover;display:block;border-radius:6px;" '
+            f'onerror="this.parentElement.style.display=\'none\'" />'
             f'<figcaption style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">'
             f'{cap_text} -- {credit}</figcaption>'
             f'</figure>'
         )
 
 
+# ─────────────────────────────────────────────
+# CLIENTE PEXELS (FALLBACK)
+# ─────────────────────────────────────────────
 class PexelsClient:
-    """Fallback de imagenes cuando Google no encuentra resultados."""
+    """Fallback de imagenes cuando Serper no encuentra resultados."""
 
     BASE_URL = "https://api.pexels.com/v1/search"
 
@@ -168,33 +194,40 @@ class PexelsClient:
         )
 
 
+# ─────────────────────────────────────────────
+# GENERADOR PRINCIPAL
+# ─────────────────────────────────────────────
 class ArticleGenerator:
-    """Genera articulos periodisticos usando Claude + Google Images + Pexels fallback."""
+    """Genera articulos periodisticos usando Claude + Serper Images + Pexels fallback."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: str = DEFAULT_MODEL,
         pexels_api_key: Optional[str] = None,
+        serper_api_key: Optional[str] = None,
+        # Mantener compatibilidad con parametros anteriores de Google
         google_api_key: Optional[str] = None,
         google_cse_id: Optional[str] = None,
     ):
         self.model = model
         self.client = anthropic.Anthropic(api_key=api_key)
-        self.google = GoogleImageClient(api_key=google_api_key, cse_id=google_cse_id)
+        self.serper = SerperImageClient(api_key=serper_api_key)
         self.pexels = PexelsClient(api_key=pexels_api_key)
 
     def _get_image(self, query: str, caption: str) -> str:
-        """Google primero, Pexels como fallback."""
-        image = self.google.search_image(query)
+        """Serper primero, Pexels como fallback."""
+        image = self.serper.search_image(query)
         if image:
-            logger.info(f"  Imagen de Google: {image['url'][:60]}...")
-            return self.google.build_image_html(image, caption=caption)
-        logger.info("  Google sin resultados, intentando Pexels...")
+            logger.info(f"  Imagen de Serper/Google: {image['url'][:60]}...")
+            return self.serper.build_image_html(image, caption=caption)
+
+        logger.info("  Serper sin resultados, intentando Pexels...")
         image = self.pexels.search_image(query)
         if image:
             logger.info(f"  Imagen de Pexels: {image['url_medium'][:60]}...")
             return self.pexels.build_image_html(image, caption=caption)
+
         logger.warning("  No se encontro imagen.")
         return ""
 
@@ -352,19 +385,17 @@ Extension: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
         return ""
 
     def _build_image_query(self, title: str, category: str) -> str:
-        """Claude genera una query visual inteligente para buscar la imagen."""
+        """Claude genera una query visual inteligente para Serper/Google Images."""
         category_fallbacks = {
             "politica":      "gobierno Republica Dominicana politica",
-            "politica":      "gobierno Republica Dominicana politica",
-            "economia":      "economia negocios finanzas",
-            "economia":      "economia negocios finanzas",
-            "deportes":      "deportes atletas competencia",
-            "internacional": "diplomacia mundo noticias",
-            "tecnologia":    "tecnologia innovacion digital",
+            "economia":      "economia negocios finanzas dominicana",
+            "deportes":      "deportes atletas Republica Dominicana",
+            "internacional": "noticias internacionales mundo",
             "tecnologia":    "tecnologia innovacion digital",
             "sociedad":      "comunidad personas sociedad dominicana",
-            "salud":         "salud medicina hospital",
-            "cultura":       "cultura artes entretenimiento",
+            "salud":         "salud medicina hospital dominicano",
+            "cultura":       "cultura artes entretenimiento dominicano",
+            "educacion":     "educacion escuela universidad dominicana",
         }
         fallback = category_fallbacks.get(category.lower(), "Republica Dominicana noticias")
 
@@ -375,16 +406,19 @@ Categoria: {category}
 Genera UNA query de busqueda de 4-6 palabras para encontrar una imagen periodistica real en Google Images.
 
 REGLAS:
-- Si menciona una persona famosa, incluye su nombre completo
-- Si menciona un lugar dominicano, incluyelo
-- Prioriza terminos en espanol para noticias dominicanas
+- Si menciona una persona famosa dominicana o internacional, incluye su nombre completo
+- Si menciona un lugar en Republica Dominicana, incluyelo
+- Prioriza terminos en espanol
+- La query debe ser muy especifica para encontrar la imagen correcta
 - Responde SOLO con las palabras clave, sin explicacion
 
 EJEMPLOS:
-Titular: "Abinader anuncia reforma fiscal" - respuesta: Luis Abinader presidente Republica Dominicana
+Titular: "Abinader anuncia reforma fiscal" - respuesta: Luis Abinader presidente Republica Dominicana 2026
 Titular: "Huracan amenaza el Caribe" - respuesta: huracan tormenta caribe Republica Dominicana
 Titular: "Tigres del Licey ganan campeonato" - respuesta: Tigres Licey beisbol dominicano campeones
-Titular: "Trump critica a la OTAN" - respuesta: Donald Trump Casa Blanca conferencia prensa"""
+Titular: "Trump critica a la OTAN" - respuesta: Donald Trump Casa Blanca conferencia prensa
+Titular: "Gloria Ceballos explica lluvias" - respuesta: Gloria Ceballos meteorologa dominicana
+Titular: "COE alerta por inundaciones" - respuesta: inundaciones Santo Domingo Republica Dominicana"""
 
             query = self._call_api(prompt, max_tokens=30).strip()
             query = query.split("\n")[0].strip().strip('"').strip("'").strip(".")
