@@ -1,6 +1,7 @@
 """
 Módulo generador de artículos periodísticos - NeuroDiario
-Genera artículos originales con formato HTML profesional e imágenes automáticas via Pexels.
+Genera artículos originales con formato HTML profesional.
+Imágenes: Google Custom Search (principal) → Pexels (fallback)
 """
 
 import logging
@@ -26,7 +27,6 @@ MESES_ES = {
 }
 
 def fecha_en_espanol(dt: datetime) -> str:
-    """Convierte datetime a formato '8 de abril de 2026'."""
     return f"{dt.day} de {MESES_ES[dt.month]} de {dt.year}"
 
 
@@ -66,10 +66,86 @@ INSTRUCCIONES DE REDACCIÓN:
 
 
 # ─────────────────────────────────────────────
-# CLIENTE PEXELS
+# CLIENTE GOOGLE CUSTOM SEARCH (PRINCIPAL)
+# ─────────────────────────────────────────────
+class GoogleImageClient:
+    """Busca imágenes usando Google Custom Search API."""
+
+    BASE_URL = "https://www.googleapis.com/customsearch/v1"
+
+    def __init__(self, api_key: Optional[str] = None, cse_id: Optional[str] = None):
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY", "")
+        self.cse_id = cse_id or os.getenv("GOOGLE_CSE_ID", "")
+
+    def search_image(self, query: str) -> Optional[Dict]:
+        """
+        Busca una imagen real y relevante en Google.
+
+        Args:
+            query: Palabras clave (ej: "Luis Abinader presidente República Dominicana")
+
+        Returns:
+            Dict con url, source, alt o None si no encuentra
+        """
+        if not self.api_key or not self.cse_id:
+            logger.warning("GOOGLE_API_KEY o GOOGLE_CSE_ID no configurados.")
+            return None
+
+        try:
+            params = {
+                "key": self.api_key,
+                "cx": self.cse_id,
+                "q": query,
+                "searchType": "image",
+                "num": 5,
+                "imgSize": "large",
+                "imgType": "photo",
+                "safe": "active",
+                "rights": "cc_publicdomain|cc_attribute|cc_sharealike",
+            }
+            response = requests.get(self.BASE_URL, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            items = data.get("items", [])
+            if items:
+                item = items[0]
+                return {
+                    "url": item["link"],
+                    "url_medium": item.get("image", {}).get("thumbnailLink", item["link"]),
+                    "source": item.get("displayLink", "Google"),
+                    "source_url": item.get("image", {}).get("contextLink", ""),
+                    "alt": query,
+                    "provider": "google",
+                }
+        except Exception as e:
+            logger.error(f"Error buscando imagen en Google: {e}")
+
+        return None
+
+    def build_image_html(self, image: Dict, caption: str = "") -> str:
+        cap_text = caption or image.get("alt", "")
+        source_url = image.get("source_url", "")
+        source_name = image.get("source", "")
+        credit = (
+            f'Imagen vía <a href="{source_url}" target="_blank" rel="noopener">{source_name}</a>'
+            if source_url else f"Imagen: {source_name}"
+        )
+        return (
+            f'<figure class="nd-featured-image" style="margin:0 0 24px 0;padding:0;">'
+            f'<img src="{image["url"]}" alt="{cap_text}" loading="lazy" '
+            f'style="width:100%;max-width:680px;height:360px;object-fit:cover;display:block;border-radius:6px;" />'
+            f'<figcaption style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">'
+            f'{cap_text} — {credit}</figcaption>'
+            f'</figure>'
+        )
+
+
+# ─────────────────────────────────────────────
+# CLIENTE PEXELS (FALLBACK)
 # ─────────────────────────────────────────────
 class PexelsClient:
-    """Busca imágenes libres de derechos en Pexels."""
+    """Fallback de imágenes cuando Google no encuentra resultados."""
 
     BASE_URL = "https://api.pexels.com/v1/search"
 
@@ -77,32 +153,15 @@ class PexelsClient:
         self.api_key = api_key or os.getenv("PEXELS_API_KEY", "")
 
     def search_image(self, query: str, orientation: str = "landscape") -> Optional[Dict]:
-        """
-        Busca una imagen en Pexels por palabras clave.
-
-        Args:
-            query: Palabras clave de búsqueda en inglés
-            orientation: "landscape" | "portrait" | "square"
-
-        Returns:
-            Dict con url, photographer, alt o None si no se encuentra
-        """
         if not self.api_key:
-            logger.warning("PEXELS_API_KEY no configurada — artículo sin imagen.")
+            logger.warning("PEXELS_API_KEY no configurada.")
             return None
-
         try:
             headers = {"Authorization": self.api_key}
-            params = {
-                "query": query,
-                "per_page": 5,
-                "orientation": orientation,
-            }
+            params = {"query": query, "per_page": 5, "orientation": orientation}
             response = requests.get(self.BASE_URL, headers=headers, params=params, timeout=10)
             response.raise_for_status()
-            data = response.json()
-            photos = data.get("photos", [])
-
+            photos = response.json().get("photos", [])
             if photos:
                 photo = photos[0]
                 return {
@@ -112,23 +171,13 @@ class PexelsClient:
                     "photographer_url": photo.get("photographer_url", "https://www.pexels.com"),
                     "alt": query,
                     "pexels_url": photo.get("url", "https://www.pexels.com"),
+                    "provider": "pexels",
                 }
         except Exception as e:
             logger.error(f"Error buscando imagen en Pexels: {e}")
-
         return None
 
     def build_image_html(self, image: Dict, caption: str = "") -> str:
-        """
-        Genera el HTML de la imagen con crédito Pexels.
-
-        Args:
-            image: Dict retornado por search_image()
-            caption: Texto del caption (opcional)
-
-        Returns:
-            HTML de la figura completa
-        """
         cap_text = caption or image.get("alt", "")
         credit = (
             f'Foto: <a href="{image["photographer_url"]}" target="_blank" rel="noopener">'
@@ -137,8 +186,10 @@ class PexelsClient:
         )
         return (
             f'<figure class="nd-featured-image" style="margin:0 0 24px 0;padding:0;">'
-            f'<img src="{image["url_medium"]}" alt="{cap_text}" loading="lazy" style="width:100%;max-width:680px;height:360px;object-fit:cover;display:block;border-radius:6px;" />'
-            f'<figcaption style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">{cap_text} — {credit}</figcaption>'
+            f'<img src="{image["url_medium"]}" alt="{cap_text}" loading="lazy" '
+            f'style="width:100%;max-width:680px;height:360px;object-fit:cover;display:block;border-radius:6px;" />'
+            f'<figcaption style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">'
+            f'{cap_text} — {credit}</figcaption>'
             f'</figure>'
         )
 
@@ -147,17 +198,41 @@ class PexelsClient:
 # GENERADOR PRINCIPAL
 # ─────────────────────────────────────────────
 class ArticleGenerator:
-    """Genera artículos periodísticos usando la API de Claude + imágenes Pexels."""
+    """Genera artículos periodísticos usando Claude + Google Images + Pexels fallback."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: str = DEFAULT_MODEL,
         pexels_api_key: Optional[str] = None,
+        google_api_key: Optional[str] = None,
+        google_cse_id: Optional[str] = None,
     ):
         self.model = model
         self.client = anthropic.Anthropic(api_key=api_key)
+        self.google = GoogleImageClient(api_key=google_api_key, cse_id=google_cse_id)
         self.pexels = PexelsClient(api_key=pexels_api_key)
+
+    def _get_image(self, query: str, caption: str) -> str:
+        """
+        Busca imagen en Google primero, Pexels como fallback.
+        Retorna HTML de la figura o cadena vacía si no hay imagen.
+        """
+        # Intento 1: Google Custom Search
+        image = self.google.search_image(query)
+        if image:
+            logger.info(f"  ✓ Imagen obtenida de Google: {image['url'][:60]}...")
+            return self.google.build_image_html(image, caption=caption)
+
+        # Intento 2: Pexels fallback
+        logger.info("  → Google sin resultados, intentando Pexels...")
+        image = self.pexels.search_image(query)
+        if image:
+            logger.info(f"  ✓ Imagen obtenida de Pexels: {image['url_medium'][:60]}...")
+            return self.pexels.build_image_html(image, caption=caption)
+
+        logger.warning("  ⚠ No se encontró imagen en ninguna fuente.")
+        return ""
 
     # ─────────────────────────────────────────
     # MÉTODO PRINCIPAL — Artículo desde una fuente
@@ -171,13 +246,6 @@ class ArticleGenerator:
         url: str = "",
         published_at: Optional[datetime] = None,
     ) -> Dict:
-        """
-        Genera un artículo HTML original para NeuroDiario desde un artículo fuente.
-
-        Returns:
-            Dict con title, content (HTML completo), excerpt, category, tags,
-                  source_citation, featured_image
-        """
         content_trimmed = content[:3000] if len(content) > 3000 else content
         fecha_str = fecha_en_espanol(published_at) if published_at else ""
         source_display = (
@@ -204,27 +272,16 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._clean_html(article_html)
             article_html = self._remove_h1_from_html(article_html)
 
-            # Imagen desde Pexels con query inteligente
+            # Query inteligente para imagen
             image_query = self._build_image_query(title, category)
-            image = self.pexels.search_image(image_query)
-            image_html = self.pexels.build_image_html(image, caption=title) if image else ""
+            image_html = self._get_image(image_query, caption=title)
 
-            # Pie de fuente profesional
             footer_html = self._build_footer(source_display, fecha_str, url)
-
-            # Íconos compartir
             share_html = self._build_share_icons(url or "")
-
-            # HTML completo del post
             full_content = f"{image_html}\n{article_html}\n{footer_html}\n{share_html}"
 
-            # Título: siempre desde la fuente original, limpio
             clean_title = self._clean_title(title)
-
-            # Excerpt
             excerpt = self._extract_excerpt(article_html)
-
-            # Tags
             tags = [t for t in [category, source_display, "República Dominicana", "NeuroDiario"] if t]
 
             return {
@@ -233,7 +290,6 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
                 "excerpt": excerpt,
                 "category": category,
                 "tags": tags,
-                "featured_image": image,
                 "source_citation": {
                     "source": source_display,
                     "url": url,
@@ -242,26 +298,20 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             }
 
         except Exception as e:
-            logger.error(f"Error generando artículo desde fuente única: {e}")
+            logger.error(f"Error generando artículo: {e}")
             raise
 
     # ─────────────────────────────────────────
-    # MÉTODO — Artículo desde tendencia + múltiples fuentes
+    # MÉTODO — Artículo desde tendencia
     # ─────────────────────────────────────────
     def create_article(self, trend: Dict, articles: List[Dict]) -> Dict:
-        """
-        Genera artículo basado en tendencia y múltiples fuentes.
-        """
         articles = articles[:5]
         sources_text = self._format_sources(articles)
         topic = trend.get("topic", "")
         category = trend.get("category", "general")
 
         source_names = list({a.get("source", "") for a in articles if a.get("source")})
-        source_names = [
-            s for s in source_names
-            if s.lower() not in ("", "desconocido", "medio desconocido")
-        ]
+        source_names = [s for s in source_names if s.lower() not in ("", "desconocido", "medio desconocido")]
         sources_citation = ", ".join(source_names[:3]) if source_names else "medios locales"
 
         prompt = f"""Redacta un artículo periodístico ORIGINAL sobre el tema '{topic}' para NeuroDiario.
@@ -272,36 +322,27 @@ FUENTES BASE:
 MEDIOS CONSULTADOS: {sources_citation}
 CATEGORÍA: {category}
 
-IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>, NUNCA un <h1> ni el título repetido. WordPress coloca el título automáticamente. Sin comentarios. Sin Markdown."""
+IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>, NUNCA un <h1>. Sin comentarios. Sin Markdown."""
 
         try:
             article_html = self._call_api(prompt, max_tokens=2500)
             article_html = self._clean_html(article_html)
             article_html = self._remove_h1_from_html(article_html)
 
-            # Imagen con query inteligente
             image_query = self._build_image_query(topic, category)
-            image = self.pexels.search_image(image_query)
-            image_html = self.pexels.build_image_html(image, caption=topic) if image else ""
+            image_html = self._get_image(image_query, caption=topic)
 
-            # Pie de fuente
             fecha_str = fecha_en_espanol(datetime.now())
             footer_html = self._build_footer(sources_citation, fecha_str, "")
-
-            # Íconos compartir
             share_html = self._build_share_icons("")
-
             full_content = f"{image_html}\n{article_html}\n{footer_html}\n{share_html}"
-            clean_title = self._clean_title(topic)
-            excerpt = self._extract_excerpt(article_html)
 
             return {
-                "title": clean_title,
+                "title": self._clean_title(topic),
                 "content": full_content,
-                "excerpt": excerpt,
+                "excerpt": self._extract_excerpt(article_html),
                 "category": category,
                 "tags": [category, "República Dominicana", "NeuroDiario"],
-                "featured_image": image,
                 "sources": [a.get("url", "") for a in articles if a.get("url")],
             }
 
@@ -313,34 +354,22 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
     # MÉTODO — Boletín diario
     # ─────────────────────────────────────────
     def generate_digest(self, trends: List[Dict]) -> str:
-        """
-        Genera un boletín diario con las principales tendencias.
-        """
         trends_text = "\n".join(
-            f"- {t['topic']} ({t.get('article_count', 0)} artículos)"
-            for t in trends[:5]
+            f"- {t['topic']} ({t.get('article_count', 0)} artículos)" for t in trends[:5]
         )
-
         prompt = f"""Redacta un boletín periodístico diario para NeuroDiario.
 
 TENDENCIAS DEL DÍA:
 {trends_text}
 
-FORMATO HTML:
-- <h2> con título atractivo del boletín
-- <p> de introducción breve
-- Un <h2> y <p> por cada tendencia
-- <p> de cierre con perspectiva general
-
+FORMATO HTML: <h2> título, <p> introducción, un <h2> y <p> por tendencia, <p> cierre.
 Extensión: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
-
         return self._call_api(prompt)
 
     # ─────────────────────────────────────────
     # UTILIDADES PRIVADAS
     # ─────────────────────────────────────────
     def _call_api(self, user_prompt: str, max_tokens: int = 2048) -> str:
-        """Llama a la API de Claude."""
         try:
             message = self.client.messages.create(
                 model=self.model,
@@ -354,21 +383,17 @@ Extensión: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
             raise
 
     def _clean_html(self, html: str) -> str:
-        """Elimina bloques de código Markdown si Claude los incluye por error."""
         html = re.sub(r"```html?\s*", "", html)
         html = re.sub(r"```\s*", "", html)
         return html.strip()
 
     def _clean_title(self, title: str) -> str:
-        """Limpia el título removiendo Markdown y espacios."""
         return title.strip().lstrip("#").strip()
 
     def _remove_h1_from_html(self, html: str) -> str:
-        """Elimina cualquier <h1> del cuerpo generado para evitar duplicación con WordPress."""
         return re.sub(r"<h1[^>]*>.*?</h1>", "", html, flags=re.IGNORECASE | re.DOTALL).strip()
 
     def _extract_excerpt(self, html: str) -> str:
-        """Extrae el primer párrafo como excerpt."""
         match = re.search(r"<p[^>]*>(.*?)</p>", html, re.IGNORECASE | re.DOTALL)
         if match:
             text = re.sub(r"<[^>]+>", "", match.group(1)).strip()
@@ -377,56 +402,54 @@ Extensión: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
 
     def _build_image_query(self, title: str, category: str) -> str:
         """
-        Genera una query inteligente para Pexels usando Claude.
-        Claude interpreta el tema real de la noticia y devuelve
-        palabras clave visuales en inglés, apropiadas para foto periodística.
+        Claude genera una query de búsqueda inteligente basada en el título.
+        Para noticias dominicanas incluye el contexto del país.
         """
         category_fallbacks = {
-            "politica":      "government meeting politicians",
-            "política":      "government meeting politicians",
-            "economia":      "economy business finance",
-            "economía":      "economy business finance",
-            "deportes":      "sports athletes competition",
-            "internacional": "world diplomacy international",
-            "tecnologia":    "technology innovation digital",
-            "tecnología":    "technology innovation digital",
-            "sociedad":      "community people society",
-            "salud":         "health medicine hospital",
-            "cultura":       "culture arts performance",
+            "politica": "gobierno República Dominicana política",
+            "política": "gobierno República Dominicana política",
+            "economia": "economía negocios finanzas",
+            "economía": "economía negocios finanzas",
+            "deportes": "deportes atletas competencia",
+            "internacional": "diplomacia mundo noticias",
+            "tecnologia": "tecnología innovación digital",
+            "tecnología": "tecnología innovación digital",
+            "sociedad": "comunidad personas sociedad dominicana",
+            "salud": "salud medicina hospital",
+            "cultura": "cultura artes República Dominicana",
         }
-        fallback = category_fallbacks.get(category.lower(), "Dominican Republic news")
+        fallback = category_fallbacks.get(category.lower(), "República Dominicana noticias")
 
         try:
-            prompt = f"""Dado este titular de noticia periodística: "{title}"
+            prompt = f"""Dado este titular de noticia: "{title}"
 Categoría: {category}
 
-Genera UNA query de búsqueda en inglés de 3 a 5 palabras para encontrar una fotografía periodística apropiada en Pexels.
+Genera UNA query de búsqueda de 4-6 palabras para encontrar una imagen periodística real en Google Images.
 
 REGLAS:
-- Usa conceptos visuales concretos, no nombres propios de personas
-- Piensa qué imagen ilustraría esta noticia en un periódico impreso
-- Responde SOLO con las palabras clave, sin explicación, sin puntos, sin comillas
+- Si la noticia menciona una persona famosa (político, artista, deportista), incluye su nombre completo
+- Si menciona un lugar en República Dominicana, inclúyelo
+- Si es un evento específico, describe el evento visualmente
+- Prioriza términos en español para noticias dominicanas
+- Responde SOLO con las palabras clave, sin explicación
 
 EJEMPLOS:
-Titular: "Abinader anuncia reforma fiscal urgente" → government budget meeting office
-Titular: "Huracán amenaza costas del Caribe" → hurricane storm waves caribbean
-Titular: "Economía dominicana crece 5% en el primer trimestre" → economy growth business chart
-Titular: "Debate sobre el mejor secundario del anime" → anime manga convention fans crowd
-Titular: "Protestas en Santiago por falta de agua" → protest crowd street demonstration"""
+"Abinader anuncia reforma fiscal" → Luis Abinader presidente República Dominicana
+"Huracán amenaza el Caribe" → huracán tormenta caribe República Dominicana
+"Tigres del Licey ganan campeonato" → Tigres Licey béisbol dominicano campeones
+"Trump critica a la OTAN" → Donald Trump Casa Blanca conferencia prensa
+"Hospital de Santiago inaugura áreas" → Hospital Regional Santiago República Dominicana"""
 
-            query = self._call_api(prompt, max_tokens=25).strip()
-            # Limpiar cualquier texto extra que Claude pueda agregar
+            query = self._call_api(prompt, max_tokens=30).strip()
             query = query.split("\n")[0].strip().strip('"').strip("'").strip(".")
-            # Validar que la query sea usable
-            if 3 <= len(query) <= 80:
+            if 3 <= len(query) <= 100:
                 return query
             return fallback
         except Exception as e:
-            logger.warning(f"Error generando query de imagen con Claude: {e} — usando fallback")
+            logger.warning(f"Error generando query de imagen: {e}")
             return fallback
 
     def _build_footer(self, source: str, fecha: str, url: str) -> str:
-        """Genera el pie de fuente en HTML profesional."""
         url_html = (
             f'<a href="{url}" target="_blank" rel="noopener noreferrer">Ver nota original</a>'
             if url else ""
@@ -443,19 +466,14 @@ Titular: "Protestas en Santiago por falta de agua" → protest crowd street demo
         return "\n".join(parts)
 
     def _build_share_icons(self, article_url: str) -> str:
-        """Genera íconos de compartir con logos SVG oficiales y colores de cada red."""
         encoded_url = requests.utils.quote(article_url, safe="") if article_url else ""
 
         icon_facebook = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#1877F2" d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.97h-1.513c-1.491 0-1.956.93-1.956 1.884v2.25h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg>'
-
         icon_x = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#000000" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.737-8.835L1.254 2.25H8.08l4.253 5.622 5.911-5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>'
-
         icon_whatsapp = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#25D366" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>'
-
         icon_rss = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#F26522" d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19.01 7.38 20 6.18 20C4.98 20 4 19.01 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>'
 
         base_style = "display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;margin:0 4px;text-decoration:none;"
-
         return (
             f'<div style="display:flex;align-items:center;gap:4px;margin:20px 0;padding:12px 0;border-top:1px solid #e5e5e5;">'
             f'<span style="font-size:13px;color:#666;margin-right:8px;font-family:sans-serif;">Compartir:</span>'
@@ -467,7 +485,6 @@ Titular: "Protestas en Santiago por falta de agua" → protest crowd street demo
         )
 
     def _format_sources(self, articles: List[Dict]) -> str:
-        """Formatea artículos como texto para el prompt."""
         parts = []
         for i, article in enumerate(articles[:5], 1):
             source = article.get("source", "")
