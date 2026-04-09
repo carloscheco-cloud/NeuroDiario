@@ -137,7 +137,7 @@ class PublishingPipeline:
                     logger.warning(f"  ⚠ No se pudo reservar artículo {article['id']} — saltando")
                     continue
 
-                # Generar artículo con Claude
+                # Generar artículo con Claude (sin wordpress_url aún — se actualiza después)
                 logger.info("  → Generando con Claude AI...")
                 generated = self.generator.generate_from_single_article(
                     title=article['title'],
@@ -146,6 +146,7 @@ class PublishingPipeline:
                     category=article['category'],
                     url=article['url'],
                     published_at=article['published_at'],
+                    wordpress_url="",  # Se actualizará tras publicar
                 )
                 logger.info(f"  ✓ Generado: {generated['title'][:60]}")
 
@@ -163,14 +164,22 @@ class PublishingPipeline:
                 post_id = self.publisher.publish(wp_article)
 
                 if post_id:
-                    logger.info(f"  ✓ PUBLICADO — WordPress ID: {post_id}")
-                    # Marcar como publicado en BD con el WP post ID
+                    # Construir URL real del post en NeuroDiario
+                    wp_base = self.settings.WORDPRESS_URL.rstrip('/')
+                    wordpress_url = f"{wp_base}/?p={post_id}"
+                    logger.info(f"  ✓ PUBLICADO — WordPress ID: {post_id} | URL: {wordpress_url}")
+
+                    # Regenerar los botones compartir con la URL real de NeuroDiario
+                    final_content = self.generator._replace_share_url(
+                        generated['content'], wordpress_url
+                    )
+
                     self._mark_as_published(
                         generated_record_id=generated_record_id,
                         article_id=article['id'],
                         wp_post_id=post_id,
                         title=generated['title'],
-                        content=generated['content'],
+                        content=final_content,
                         category=article['category'],
                         tags=generated.get('tags', []),
                     )
