@@ -49,7 +49,7 @@ INSTRUCCIONES DE REDACCIÓN:
    - Párrafos cortos: máximo 4 oraciones por párrafo
    - Mínimo 4 párrafos de desarrollo
    - Si aplica, incluye un párrafo de contexto histórico o regional
-   - Añade un subtítulo <h2> a mitad del artículo para dividir el contenido
+   - Añade un subtítulo <h2> a mitad del artículo para dividir el contenido. Ese <h2> NUNCA debe repetir el titular principal — debe ser un subtítulo nuevo que introduzca la segunda parte del desarrollo.
 
 4. TONO: Neutral pero con criterio. NeuroDiario analiza, contextualiza y explica. Evita frases vacías como "cabe destacar que", "es importante mencionar" o "en ese sentido".
 
@@ -60,8 +60,9 @@ INSTRUCCIONES DE REDACCIÓN:
    - Nunca usar Markdown (#, ##, ---, **texto**) — SOLO HTML
    - No inventes datos que no estén en la fuente original
    - No copies texto literal de la fuente
+   - NUNCA incluyas el título del artículo como <h1> al inicio del cuerpo — WordPress lo coloca automáticamente. El cuerpo empieza directo con el primer <p>.
 
-6. OUTPUT FORMAT: Devuelve SOLO el artículo en HTML limpio, listo para WordPress. Usa únicamente estas etiquetas: <p>, <strong>, <em>, <blockquote>, <h2>. SIN comentarios, SIN explicaciones, SIN texto fuera del artículo."""
+6. OUTPUT FORMAT: Devuelve SOLO el cuerpo del artículo en HTML limpio. NO incluyas <h1> en ninguna parte. Usa únicamente: <p>, <strong>, <em>, <blockquote>, <h2>. SIN comentarios, SIN explicaciones, SIN texto fuera del artículo."""
 
 
 # ─────────────────────────────────────────────
@@ -80,7 +81,7 @@ class PexelsClient:
         Busca una imagen en Pexels por palabras clave.
 
         Args:
-            query: Palabras clave de búsqueda (ej: "economía República Dominicana")
+            query: Palabras clave de búsqueda en inglés
             orientation: "landscape" | "portrait" | "square"
 
         Returns:
@@ -96,25 +97,17 @@ class PexelsClient:
                 "query": query,
                 "per_page": 5,
                 "orientation": orientation,
-                "locale": "es-ES",
             }
             response = requests.get(self.BASE_URL, headers=headers, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
-
             photos = data.get("photos", [])
-            if not photos:
-                # Reintento en inglés si no hay resultados en español
-                params["locale"] = "en-US"
-                response = requests.get(self.BASE_URL, headers=headers, params=params, timeout=10)
-                data = response.json()
-                photos = data.get("photos", [])
 
             if photos:
                 photo = photos[0]
                 return {
                     "url": photo["src"]["large2x"],
-                    "url_medium": photo["src"]["large"],
+                    "url_medium": photo["src"]["medium"],
                     "photographer": photo.get("photographer", "Pexels"),
                     "photographer_url": photo.get("photographer_url", "https://www.pexels.com"),
                     "alt": query,
@@ -137,12 +130,15 @@ class PexelsClient:
             HTML de la figura completa
         """
         cap_text = caption or image.get("alt", "")
-        credit = f'Foto: <a href="{image["photographer_url"]}" target="_blank" rel="noopener">{image["photographer"]}</a> en <a href="{image["pexels_url"]}" target="_blank" rel="noopener">Pexels</a>'
-
+        credit = (
+            f'Foto: <a href="{image["photographer_url"]}" target="_blank" rel="noopener">'
+            f'{image["photographer"]}</a> en '
+            f'<a href="{image["pexels_url"]}" target="_blank" rel="noopener">Pexels</a>'
+        )
         return (
-            f'<figure class="nd-featured-image">'
-            f'<img src="{image["url_medium"]}" alt="{cap_text}" loading="lazy" />'
-            f'<figcaption>{cap_text} — {credit}</figcaption>'
+            f'<figure class="nd-featured-image" style="margin:0 0 24px 0;padding:0;">'
+            f'<img src="{image["url_medium"]}" alt="{cap_text}" loading="lazy" style="width:100%;max-width:680px;height:360px;object-fit:cover;display:block;border-radius:6px;" />'
+            f'<figcaption style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">{cap_text} — {credit}</figcaption>'
             f'</figure>'
         )
 
@@ -178,21 +174,16 @@ class ArticleGenerator:
         """
         Genera un artículo HTML original para NeuroDiario desde un artículo fuente.
 
-        Args:
-            title: Título del artículo original
-            content: Contenido del artículo original
-            source: Nombre del medio fuente (ej: "Diario Libre")
-            category: Categoría del artículo
-            url: URL del artículo original
-            published_at: Fecha de publicación original
-
         Returns:
             Dict con title, content (HTML completo), excerpt, category, tags,
                   source_citation, featured_image
         """
         content_trimmed = content[:3000] if len(content) > 3000 else content
         fecha_str = fecha_en_espanol(published_at) if published_at else ""
-        source_display = source if source and source.lower() not in ("", "desconocido", "medio desconocido") else "fuente local"
+        source_display = (
+            source if source and source.lower() not in ("", "desconocido", "medio desconocido")
+            else "fuente local"
+        )
 
         prompt = f"""Redacta un artículo periodístico ORIGINAL para NeuroDiario basado en esta noticia:
 
@@ -206,13 +197,14 @@ DATOS DE LA FUENTE:
 CONTENIDO FUENTE:
 {content_trimmed}
 
-Recuerda: devuelve SOLO el artículo en HTML. Sin comentarios. Sin Markdown."""
+IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>, NUNCA un <h1> ni el título repetido. WordPress coloca el título automáticamente. Sin comentarios. Sin Markdown."""
 
         try:
             article_html = self._call_api(prompt, max_tokens=2000)
             article_html = self._clean_html(article_html)
+            article_html = self._remove_h1_from_html(article_html)
 
-            # Imagen desde Pexels
+            # Imagen desde Pexels con query inteligente
             image_query = self._build_image_query(title, category)
             image = self.pexels.search_image(image_query)
             image_html = self.pexels.build_image_html(image, caption=title) if image else ""
@@ -226,8 +218,8 @@ Recuerda: devuelve SOLO el artículo en HTML. Sin comentarios. Sin Markdown."""
             # HTML completo del post
             full_content = f"{image_html}\n{article_html}\n{footer_html}\n{share_html}"
 
-            # Título limpio
-            clean_title = self._extract_title_from_html(article_html) or self._clean_title(title)
+            # Título: siempre desde la fuente original, limpio
+            clean_title = self._clean_title(title)
 
             # Excerpt
             excerpt = self._extract_excerpt(article_html)
@@ -259,13 +251,6 @@ Recuerda: devuelve SOLO el artículo en HTML. Sin comentarios. Sin Markdown."""
     def create_article(self, trend: Dict, articles: List[Dict]) -> Dict:
         """
         Genera artículo basado en tendencia y múltiples fuentes.
-
-        Args:
-            trend: Tendencia detectada
-            articles: Artículos relacionados
-
-        Returns:
-            Dict con artículo estructurado
         """
         articles = articles[:5]
         sources_text = self._format_sources(articles)
@@ -273,7 +258,10 @@ Recuerda: devuelve SOLO el artículo en HTML. Sin comentarios. Sin Markdown."""
         category = trend.get("category", "general")
 
         source_names = list({a.get("source", "") for a in articles if a.get("source")})
-        source_names = [s for s in source_names if s.lower() not in ("", "desconocido", "medio desconocido")]
+        source_names = [
+            s for s in source_names
+            if s.lower() not in ("", "desconocido", "medio desconocido")
+        ]
         sources_citation = ", ".join(source_names[:3]) if source_names else "medios locales"
 
         prompt = f"""Redacta un artículo periodístico ORIGINAL sobre el tema '{topic}' para NeuroDiario.
@@ -284,13 +272,14 @@ FUENTES BASE:
 MEDIOS CONSULTADOS: {sources_citation}
 CATEGORÍA: {category}
 
-Recuerda: devuelve SOLO el artículo en HTML. Sin comentarios. Sin Markdown."""
+IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>, NUNCA un <h1> ni el título repetido. WordPress coloca el título automáticamente. Sin comentarios. Sin Markdown."""
 
         try:
             article_html = self._call_api(prompt, max_tokens=2500)
             article_html = self._clean_html(article_html)
+            article_html = self._remove_h1_from_html(article_html)
 
-            # Imagen
+            # Imagen con query inteligente
             image_query = self._build_image_query(topic, category)
             image = self.pexels.search_image(image_query)
             image_html = self.pexels.build_image_html(image, caption=topic) if image else ""
@@ -303,7 +292,7 @@ Recuerda: devuelve SOLO el artículo en HTML. Sin comentarios. Sin Markdown."""
             share_html = self._build_share_icons("")
 
             full_content = f"{image_html}\n{article_html}\n{footer_html}\n{share_html}"
-            clean_title = self._extract_title_from_html(article_html) or topic
+            clean_title = self._clean_title(topic)
             excerpt = self._extract_excerpt(article_html)
 
             return {
@@ -326,12 +315,6 @@ Recuerda: devuelve SOLO el artículo en HTML. Sin comentarios. Sin Markdown."""
     def generate_digest(self, trends: List[Dict]) -> str:
         """
         Genera un boletín diario con las principales tendencias.
-
-        Args:
-            trends: Lista de tendencias detectadas
-
-        Returns:
-            HTML del boletín
         """
         trends_text = "\n".join(
             f"- {t['topic']} ({t.get('article_count', 0)} artículos)"
@@ -344,12 +327,12 @@ TENDENCIAS DEL DÍA:
 {trends_text}
 
 FORMATO HTML:
-- <h1> con título atractivo del boletín
+- <h2> con título atractivo del boletín
 - <p> de introducción breve
 - Un <h2> y <p> por cada tendencia
 - <p> de cierre con perspectiva general
 
-Extensión: 400-600 palabras. Devuelve SOLO HTML."""
+Extensión: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
 
         return self._call_api(prompt)
 
@@ -380,14 +363,9 @@ Extensión: 400-600 palabras. Devuelve SOLO HTML."""
         """Limpia el título removiendo Markdown y espacios."""
         return title.strip().lstrip("#").strip()
 
-    def _extract_title_from_html(self, html: str) -> str:
-        """Intenta extraer el primer <h1> o <h2> del HTML generado como título del post."""
-        match = re.search(r"<h[12][^>]*>(.*?)</h[12]>", html, re.IGNORECASE | re.DOTALL)
-        if match:
-            raw = re.sub(r"<[^>]+>", "", match.group(1)).strip()
-            # Si el h1/h2 está en el cuerpo, lo removemos para que el título no se duplique
-            return raw
-        return ""
+    def _remove_h1_from_html(self, html: str) -> str:
+        """Elimina cualquier <h1> del cuerpo generado para evitar duplicación con WordPress."""
+        return re.sub(r"<h1[^>]*>.*?</h1>", "", html, flags=re.IGNORECASE | re.DOTALL).strip()
 
     def _extract_excerpt(self, html: str) -> str:
         """Extrae el primer párrafo como excerpt."""
@@ -398,30 +376,61 @@ Extensión: 400-600 palabras. Devuelve SOLO HTML."""
         return ""
 
     def _build_image_query(self, title: str, category: str) -> str:
-        """Construye la query de búsqueda para Pexels."""
-        # Palabras clave por categoría
-        category_keywords = {
-            "politica": "politics government",
-            "política": "politics government",
-            "economia": "economy business",
-            "economía": "economy business finance",
-            "deportes": "sports Dominican Republic",
-            "internacional": "world international news",
-            "tecnologia": "technology innovation",
-            "tecnología": "technology innovation",
-            "sociedad": "community society people",
-            "salud": "health medicine",
-            "cultura": "culture arts",
+        """
+        Genera una query inteligente para Pexels usando Claude.
+        Claude interpreta el tema real de la noticia y devuelve
+        palabras clave visuales en inglés, apropiadas para foto periodística.
+        """
+        category_fallbacks = {
+            "politica":      "government meeting politicians",
+            "política":      "government meeting politicians",
+            "economia":      "economy business finance",
+            "economía":      "economy business finance",
+            "deportes":      "sports athletes competition",
+            "internacional": "world diplomacy international",
+            "tecnologia":    "technology innovation digital",
+            "tecnología":    "technology innovation digital",
+            "sociedad":      "community people society",
+            "salud":         "health medicine hospital",
+            "cultura":       "culture arts performance",
         }
-        cat_key = category_keywords.get(category.lower(), "Dominican Republic")
+        fallback = category_fallbacks.get(category.lower(), "Dominican Republic news")
 
-        # Usar las primeras 4 palabras del título + categoría
-        title_words = " ".join(title.split()[:4])
-        return f"{title_words} {cat_key}"
+        try:
+            prompt = f"""Dado este titular de noticia periodística: "{title}"
+Categoría: {category}
+
+Genera UNA query de búsqueda en inglés de 3 a 5 palabras para encontrar una fotografía periodística apropiada en Pexels.
+
+REGLAS:
+- Usa conceptos visuales concretos, no nombres propios de personas
+- Piensa qué imagen ilustraría esta noticia en un periódico impreso
+- Responde SOLO con las palabras clave, sin explicación, sin puntos, sin comillas
+
+EJEMPLOS:
+Titular: "Abinader anuncia reforma fiscal urgente" → government budget meeting office
+Titular: "Huracán amenaza costas del Caribe" → hurricane storm waves caribbean
+Titular: "Economía dominicana crece 5% en el primer trimestre" → economy growth business chart
+Titular: "Debate sobre el mejor secundario del anime" → anime manga convention fans crowd
+Titular: "Protestas en Santiago por falta de agua" → protest crowd street demonstration"""
+
+            query = self._call_api(prompt, max_tokens=25).strip()
+            # Limpiar cualquier texto extra que Claude pueda agregar
+            query = query.split("\n")[0].strip().strip('"').strip("'").strip(".")
+            # Validar que la query sea usable
+            if 3 <= len(query) <= 80:
+                return query
+            return fallback
+        except Exception as e:
+            logger.warning(f"Error generando query de imagen con Claude: {e} — usando fallback")
+            return fallback
 
     def _build_footer(self, source: str, fecha: str, url: str) -> str:
         """Genera el pie de fuente en HTML profesional."""
-        url_html = f'<a href="{url}" target="_blank" rel="noopener noreferrer">Ver nota original</a>' if url else ""
+        url_html = (
+            f'<a href="{url}" target="_blank" rel="noopener noreferrer">Ver nota original</a>'
+            if url else ""
+        )
         parts = [
             '<div class="nd-source-footer">',
             f'<span class="nd-source-label">Fuente:</span> <span class="nd-source-name">{source}</span>',
@@ -434,23 +443,28 @@ Extensión: 400-600 palabras. Devuelve SOLO HTML."""
         return "\n".join(parts)
 
     def _build_share_icons(self, article_url: str) -> str:
-        """Genera íconos de compartir para redes sociales."""
+        """Genera íconos de compartir con logos SVG oficiales y colores de cada red."""
         encoded_url = requests.utils.quote(article_url, safe="") if article_url else ""
-        return f"""<div class="nd-share-bar">
-  <span class="nd-share-label">Compartir:</span>
-  <a class="nd-share-btn nd-share-facebook" href="https://www.facebook.com/sharer/sharer.php?u={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en Facebook">
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg> Facebook
-  </a>
-  <a class="nd-share-btn nd-share-twitter" href="https://twitter.com/intent/tweet?url={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en X/Twitter">
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4l16 16M4 20L20 4"/><path d="M4 4l16 16M4 20L20 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> X / Twitter
-  </a>
-  <a class="nd-share-btn nd-share-whatsapp" href="https://wa.me/?text={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en WhatsApp">
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg> WhatsApp
-  </a>
-  <a class="nd-share-btn nd-share-rss" href="/feed" target="_blank" rel="noopener" aria-label="RSS Feed">
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg> RSS
-  </a>
-</div>"""
+
+        icon_facebook = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#1877F2" d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.41c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.97h-1.513c-1.491 0-1.956.93-1.956 1.884v2.25h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg>'
+
+        icon_x = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#000000" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.737-8.835L1.254 2.25H8.08l4.253 5.622 5.911-5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>'
+
+        icon_whatsapp = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#25D366" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>'
+
+        icon_rss = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="#F26522" d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19.01 7.38 20 6.18 20C4.98 20 4 19.01 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>'
+
+        base_style = "display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;margin:0 4px;text-decoration:none;"
+
+        return (
+            f'<div style="display:flex;align-items:center;gap:4px;margin:20px 0;padding:12px 0;border-top:1px solid #e5e5e5;">'
+            f'<span style="font-size:13px;color:#666;margin-right:8px;font-family:sans-serif;">Compartir:</span>'
+            f'<a href="https://www.facebook.com/sharer/sharer.php?u={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en Facebook" style="{base_style}background:#e8f0fe;">{icon_facebook}</a>'
+            f'<a href="https://twitter.com/intent/tweet?url={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en X" style="{base_style}background:#f0f0f0;">{icon_x}</a>'
+            f'<a href="https://wa.me/?text={encoded_url}" target="_blank" rel="noopener" aria-label="Compartir en WhatsApp" style="{base_style}background:#e8f8ee;">{icon_whatsapp}</a>'
+            f'<a href="/feed" target="_blank" rel="noopener" aria-label="RSS Feed" style="{base_style}background:#fff3eb;">{icon_rss}</a>'
+            f'</div>'
+        )
 
     def _format_sources(self, articles: List[Dict]) -> str:
         """Formatea artículos como texto para el prompt."""
