@@ -151,7 +151,7 @@ class PublishingPipeline:
                     "categories": [generated['category'].title()],
                     "tags": generated.get('tags', []),
                     "status": "draft",
-                    "image_url": article.get('image_url'),  # ← NUEVO
+                    "image_url": generated.get('image_url'),  # ← NUEVO
                 }
 
                 logger.info("  → Publicando en WordPress...")
