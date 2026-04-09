@@ -217,12 +217,28 @@ class ArticleGenerator:
 
     def _get_image(self, query: str, caption: str) -> str:
         """Serper primero, Pexels como fallback."""
+        # Dominios bloqueados que no cargan bien en WordPress
+        BLOCKED_DOMAINS = [
+            "fbsbx.com",
+            "lookaside.facebook.com",
+            "lookaside.instagram.com",
+            "scontent.instagram.com",
+            "cdninstagram.com",
+            "tiktok.com",
+            "ytimg.com",
+            "youtube.com",
+        ]
+
         image = self.serper.search_image(query)
         if image:
-            logger.info(f"  Imagen de Serper/Google: {image['url'][:60]}...")
-            return self.serper.build_image_html(image, caption=caption)
+            url = image.get("url", "")
+            if not any(domain in url for domain in BLOCKED_DOMAINS):
+                logger.info(f"  Imagen de Serper/Google: {url[:60]}...")
+                return self.serper.build_image_html(image, caption=caption)
+            else:
+                logger.info(f"  Imagen bloqueada ({url[:40]}...), intentando Pexels...")
 
-        logger.info("  Serper sin resultados, intentando Pexels...")
+        logger.info("  Serper sin resultados validos, intentando Pexels...")
         image = self.pexels.search_image(query)
         if image:
             logger.info(f"  Imagen de Pexels: {image['url_medium'][:60]}...")
