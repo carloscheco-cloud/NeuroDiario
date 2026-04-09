@@ -1,36 +1,42 @@
 """
-Configuración de fuentes RSS - NeuroDiario
-Solo feeds verificados y activos.
-Última verificación: 09/04/2026
+Configuracion de fuentes RSS - NeuroDiario
+Dominicanas: 30 articulos max (prioridad total)
+Internacionales: 10 articulos max (solo las relevantes para RD pasan el filtro)
 """
 
 FETCH_TIMEOUT = 15
-MAX_ARTICLES_PER_SOURCE = 30
+
+# Dominicanas: limite alto porque todas pasan el filtro
+# Internacionales: limite bajo porque solo las relevantes pasan
+MAX_ARTICLES_PER_SOURCE = 30  # se sobreescribe por fuente abajo
 
 SOURCES = [
-    # ─────────────────────────────────
-    # DIARIO LIBRE (4 secciones activas)
-    # ─────────────────────────────────
+    # ─────────────────────────────────────────────
+    # MEDIOS DOMINICANOS — prioridad maxima
+    # ─────────────────────────────────────────────
     {
         "name": "Diario Libre",
         "url": "https://www.diariolibre.com/rss/portada.xml",
         "category": "general",
         "language": "es",
         "active": True,
+        "max_articles": 30,
     },
     {
-        "name": "Diario Libre - Política",
+        "name": "Diario Libre - Politica",
         "url": "https://www.diariolibre.com/rss/politica.xml",
         "category": "politica",
         "language": "es",
         "active": True,
+        "max_articles": 30,
     },
     {
-        "name": "Diario Libre - Economía",
+        "name": "Diario Libre - Economia",
         "url": "https://www.diariolibre.com/rss/economia.xml",
         "category": "economia",
         "language": "es",
         "active": True,
+        "max_articles": 30,
     },
     {
         "name": "Diario Libre - Deportes",
@@ -38,17 +44,15 @@ SOURCES = [
         "category": "deportes",
         "language": "es",
         "active": True,
+        "max_articles": 30,
     },
-
-    # ─────────────────────────────────
-    # OTROS MEDIOS DOMINICANOS ACTIVOS
-    # ─────────────────────────────────
     {
         "name": "El Nacional",
         "url": "https://elnacional.com.do/feed/",
         "category": "general",
         "language": "es",
         "active": True,
+        "max_articles": 30,
     },
     {
         "name": "N Digital",
@@ -56,31 +60,36 @@ SOURCES = [
         "category": "general",
         "language": "es",
         "active": True,
+        "max_articles": 30,
     },
     {
-        "name": "El Día",
+        "name": "El Dia",
         "url": "https://eldia.com.do/feed/",
         "category": "general",
         "language": "es",
         "active": True,
+        "max_articles": 30,
     },
 
-    # ─────────────────────────────────
-    # INTERNACIONALES ACTIVOS
-    # ─────────────────────────────────
+    # ─────────────────────────────────────────────
+    # INTERNACIONALES — limite reducido
+    # Solo las relevantes para RD pasan el filtro
+    # ─────────────────────────────────────────────
     {
         "name": "BBC Mundo",
         "url": "https://feeds.bbci.co.uk/mundo/rss.xml",
         "category": "internacional",
         "language": "es",
         "active": True,
+        "max_articles": 10,
     },
     {
-        "name": "El País América",
+        "name": "El Pais America",
         "url": "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/section/america/portada",
         "category": "internacional",
         "language": "es",
         "active": True,
+        "max_articles": 10,
     },
     {
         "name": "Bloomberg",
@@ -88,5 +97,6 @@ SOURCES = [
         "category": "economia",
         "language": "en",
         "active": True,
+        "max_articles": 5,
     },
 ]
