@@ -169,10 +169,13 @@ class PublishingPipeline:
                     wordpress_url = f"{wp_base}/?p={post_id}"
                     logger.info(f"  ✓ PUBLICADO — WordPress ID: {post_id} | URL: {wordpress_url}")
 
-                    # Regenerar los botones compartir con la URL real de NeuroDiario
+                    # Actualizar botones compartir con URL real de NeuroDiario
                     final_content = self.generator._replace_share_url(
                         generated['content'], wordpress_url
                     )
+
+                    # Actualizar el post en WordPress con el contenido correcto
+                    self.publisher.update_post_content(post_id, final_content)
 
                     self._mark_as_published(
                         generated_record_id=generated_record_id,
