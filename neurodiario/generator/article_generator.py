@@ -284,7 +284,7 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             share_url = wordpress_url if wordpress_url else url
             share_html = self._build_share_icons(share_url)
 
-            full_content = f"{image_html}\n{article_html}\n{footer_html}\n{share_html}"
+            full_content = f"{article_html}\n{footer_html}\n{share_html}"
             clean_title = self._clean_title(title)
             excerpt = self._extract_excerpt(article_html)
             tags = [t for t in [category, source_display, "Republica Dominicana", "NeuroDiario"] if t]
@@ -337,7 +337,7 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             fecha_str = fecha_en_espanol(datetime.now())
             footer_html = self._build_footer(sources_citation, fecha_str, "")
             share_html = self._build_share_icons("")
-            full_content = f"{image_html}\n{article_html}\n{footer_html}\n{share_html}"
+            full_content = f"{article_html}\n{footer_html}\n{share_html}"
 
             return {
                 "title": self._clean_title(topic),
