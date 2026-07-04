@@ -33,6 +33,14 @@ class Settings:
     FACEBOOK_PAGE_TOKEN: str = os.getenv("FACEBOOK_PAGE_TOKEN", "")
     FACEBOOK_PAGE_ID: str = os.getenv("FACEBOOK_PAGE_ID", "")
 
+    # ── Telegram ───────────────────────────────────────────────────────────────
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "")
+
+    # ── Imágenes ───────────────────────────────────────────────────────────────
+    SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
+    PEXELS_API_KEY: str = os.getenv("PEXELS_API_KEY", "")
+
     # ── Aplicación ─────────────────────────────────────────────────────────────
     DEBUG: bool = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
