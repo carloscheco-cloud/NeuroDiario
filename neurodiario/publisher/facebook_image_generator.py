@@ -21,7 +21,7 @@ WHITE      = (255, 255, 255)
 LIGHT_BLUE = (96, 165, 250)
 
 FAVICON_PATH = Path(__file__).resolve().parent / "assets" / "favicon_nd.png"
-FONT_BOLD    = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT_BOLD    = str(Path(__file__).resolve().parent / "assets" / "DejaVuSans-Bold.ttf")
 
 
 def _get_fonts():
