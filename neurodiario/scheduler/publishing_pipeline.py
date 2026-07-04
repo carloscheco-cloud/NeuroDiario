@@ -3,13 +3,24 @@ Pipeline de Publicación Automática - NeuroDiario Fase 1
 
 Toma artículos procesados de la BD, los envía a Claude para reescritura,
 y los publica automáticamente en WordPress citando las fuentes.
+
+Incluye:
+- Auto-limpieza de artículos atascados en estado "processing"
+- Publicación automática en Facebook al pasar a "published" en WordPress
 """
 
 import logging
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────
+# FEATURE FLAGS
+# ─────────────────────────────────────────────
+USE_FACEBOOK_POSTING = True   # Cambiar a False para desactivar Facebook sin borrar código
+PROCESSING_TIMEOUT_MINUTES = 30  # Artículos en "processing" por más de esto se limpian
 
 
 class PublishingPipeline:
@@ -41,6 +52,84 @@ class PublishingPipeline:
                 password=self.settings.WORDPRESS_PASSWORD,
             )
         return self._publisher
+
+    # ─────────────────────────────────────────────
+    # LIMPIEZA AUTOMÁTICA DE "PROCESSING" ATASCADOS
+    # ─────────────────────────────────────────────
+
+    def cleanup_stuck_processing(self) -> int:
+        """
+        Libera artículos que quedaron atascados en estado 'processing'
+        por más de PROCESSING_TIMEOUT_MINUTES minutos.
+        Esto evita que bloqueen el pipeline en ciclos posteriores.
+        """
+        from neurodiario.db.database import get_db
+        from neurodiario.db.models import GeneratedArticle
+
+        cutoff = datetime.utcnow() - timedelta(minutes=PROCESSING_TIMEOUT_MINUTES)
+        cleaned = 0
+
+        try:
+            with get_db() as db:
+                stuck = db.query(GeneratedArticle).filter(
+                    GeneratedArticle.status == "processing",
+                    GeneratedArticle.created_at < cutoff,
+                ).all()
+
+                for record in stuck:
+                    record.status = "failed"
+                    cleaned += 1
+
+                if cleaned:
+                    db.commit()
+                    logger.info(f"  🧹 Auto-limpieza: {cleaned} artículo(s) atascados en 'processing' → marcados como 'failed'")
+                else:
+                    logger.info("  🧹 Auto-limpieza: sin artículos atascados.")
+
+        except Exception as e:
+            logger.error(f"Error en auto-limpieza de processing: {e}")
+
+        return cleaned
+
+    # ─────────────────────────────────────────────
+    # FACEBOOK POSTING
+    # ─────────────────────────────────────────────
+
+    def post_to_facebook(self, title: str, wordpress_url: str, image_url: Optional[str] = None) -> Optional[str]:
+        """
+        Publica un artículo en Facebook con imagen generada.
+        Retorna el ID del post de Facebook si fue exitoso, None si falló.
+        """
+        if not USE_FACEBOOK_POSTING:
+            logger.info("  📘 Facebook posting desactivado (USE_FACEBOOK_POSTING=False)")
+            return None
+
+        page_token = getattr(self.settings, 'FACEBOOK_PAGE_TOKEN', None)
+        page_id = getattr(self.settings, 'FACEBOOK_PAGE_ID', None)
+
+        if not page_token or not page_id:
+            logger.warning("  📘 Facebook: faltan FACEBOOK_PAGE_TOKEN o FACEBOOK_PAGE_ID en settings — saltando")
+            return None
+
+        try:
+            from neurodiario.publisher.facebook_image_generator import post_to_facebook_with_image
+
+            fb_post_id = post_to_facebook_with_image(
+                title=title,
+                wordpress_url=wordpress_url,
+                page_id=page_id,
+                page_token=page_token,
+                image_url=image_url,
+            )
+            return fb_post_id
+
+        except Exception as e:
+            logger.error(f"  📘 Facebook: excepción al publicar — {e}")
+            return None
+
+    # ─────────────────────────────────────────────
+    # OBTENER ARTÍCULOS
+    # ─────────────────────────────────────────────
 
     def get_articles_to_publish(self, limit: int = 10) -> List[Dict]:
         """
@@ -87,7 +176,7 @@ class PublishingPipeline:
                         "url": a.url,
                         "source": a.source.name if a.source else "fuente local",
                         "published_at": a.published_at,
-                        "image_url": a.image_url,  # ← NUEVO
+                        "image_url": a.image_url,
                     })
 
                 logger.info(f"Artículos disponibles para publicar: {len(articles)}")
@@ -96,6 +185,10 @@ class PublishingPipeline:
         except Exception as e:
             logger.error(f"Error obteniendo artículos para publicar: {e}")
             return []
+
+    # ─────────────────────────────────────────────
+    # PIPELINE PRINCIPAL
+    # ─────────────────────────────────────────────
 
     def run_publishing_pipeline(self, max_articles: int = 10) -> int:
         """
@@ -108,6 +201,10 @@ class PublishingPipeline:
         logger.info("PIPELINE DE PUBLICACIÓN AUTOMÁTICA")
         logger.info(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 70)
+
+        # PASO 0: Limpieza de artículos atascados
+        logger.info("\n[PASO 0] Auto-limpieza de artículos atascados...")
+        self.cleanup_stuck_processing()
 
         logger.info("\n[PASO 1] Obteniendo artículos pendientes...")
         articles = self.get_articles_to_publish(limit=max_articles)
@@ -126,7 +223,7 @@ class PublishingPipeline:
                 logger.info(f"\n--- Artículo {i}/{len(articles)} ---")
                 logger.info(f"Título: {article['title'][:70]}")
                 logger.info(f"Fuente: {article['source']} | Categoría: {article['category']}")
-                logger.info(f"Imagen: {article.get('image_url') or 'sin imagen'}")  # ← NUEVO
+                logger.info(f"Imagen: {article.get('image_url') or 'sin imagen'}")
 
                 generated_record_id = self._reserve_article(article['id'])
                 if not generated_record_id:
@@ -151,7 +248,7 @@ class PublishingPipeline:
                     "categories": [generated['category'].title()],
                     "tags": generated.get('tags', []),
                     "status": "draft",
-                    "image_url": generated.get('image_url'),  # ← NUEVO
+                    "image_url": generated.get('image_url'),
                 }
 
                 logger.info("  → Publicando en WordPress...")
@@ -178,6 +275,13 @@ class PublishingPipeline:
                         tags=generated.get('tags', []),
                     )
                     published_count += 1
+
+                    # ── FACEBOOK: se publica cuando apruebes el borrador manualmente ──
+                    # El flujo es: WordPress draft → tú apruebas → WordPress published → Facebook
+                    # Esto se maneja en el webhook de WordPress (ver facebook_webhook.py)
+                    # Por ahora guardamos la URL para cuando se apruebe
+                    logger.info(f"  📘 Facebook: artículo en borrador — se publicará en FB cuando apruebes en WordPress")
+
                 else:
                     logger.error(f"  ✗ Error publicando en WordPress — marcando como fallido")
                     self._mark_as_failed(generated_record_id)
@@ -190,6 +294,79 @@ class PublishingPipeline:
         logger.info("=" * 70)
 
         return published_count
+
+    # ─────────────────────────────────────────────
+    # FACEBOOK: PUBLICAR AL APROBAR BORRADOR
+    # ─────────────────────────────────────────────
+
+    def publish_approved_to_facebook(self) -> int:
+        """
+        Busca artículos aprobados en WordPress (status='published') que
+        aún no se han publicado en Facebook, y los publica.
+        
+        Este método se llama en cada ciclo del scheduler, DESPUÉS del pipeline principal.
+        Así cuando tú apruebas un borrador en WordPress, en el próximo ciclo
+        (máx. 8 minutos) se publica automáticamente en Facebook.
+        """
+        from neurodiario.db.database import get_db
+        from neurodiario.db.models import GeneratedArticle
+
+        if not USE_FACEBOOK_POSTING:
+            return 0
+
+        fb_count = 0
+
+        try:
+            with get_db() as db:
+                # Busca artículos que están en WordPress como "published"
+                # pero que aún no tienen facebook_post_id
+                pending_fb = db.query(GeneratedArticle).filter(
+                    GeneratedArticle.status == "published",
+                    GeneratedArticle.facebook_post_id == None,   # noqa: E711
+                    GeneratedArticle.wordpress_post_id != None,  # noqa: E711
+                ).all()
+
+                if not pending_fb:
+                    logger.info("  📘 Facebook: sin artículos aprobados pendientes de publicar.")
+                    return 0
+
+                logger.info(f"  📘 Facebook: {len(pending_fb)} artículo(s) aprobados para publicar en FB...")
+
+                for record in pending_fb:
+                    wp_base = self.settings.WORDPRESS_URL.rstrip('/')
+                    wordpress_url = f"{wp_base}/?p={record.wordpress_post_id}"
+
+                    # Obtener image_url del artículo fuente
+                    image_url = None
+                    if record.source_article_id:
+                        from neurodiario.db.models import Article
+                        source = db.query(Article).filter(
+                            Article.id == record.source_article_id
+                        ).first()
+                        if source:
+                            image_url = source.image_url
+
+                    fb_post_id = self.post_to_facebook(
+                        title=record.title,
+                        wordpress_url=wordpress_url,
+                        image_url=image_url,
+                    )
+
+                    if fb_post_id:
+                        record.facebook_post_id = fb_post_id
+                        record.facebook_posted_at = datetime.utcnow()
+                        fb_count += 1
+
+                db.commit()
+
+        except Exception as e:
+            logger.error(f"Error publicando aprobados en Facebook: {e}")
+
+        return fb_count
+
+    # ─────────────────────────────────────────────
+    # HELPERS DE BD
+    # ─────────────────────────────────────────────
 
     def _reserve_article(self, article_id: int) -> Optional[int]:
         from neurodiario.db.database import get_db
@@ -274,7 +451,13 @@ class PublishingPipeline:
 
 def run_publishing_pipeline(max_articles: int = 10) -> int:
     pipeline = PublishingPipeline()
-    return pipeline.run_publishing_pipeline(max_articles=max_articles)
+    result = pipeline.run_publishing_pipeline(max_articles=max_articles)
+
+    # Después del pipeline principal, verificar aprobados para Facebook
+    logger.info("\n[PASO 3] Verificando artículos aprobados para Facebook...")
+    pipeline.publish_approved_to_facebook()
+
+    return result
 
 
 if __name__ == "__main__":
