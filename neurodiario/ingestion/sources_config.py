@@ -3,13 +3,10 @@ Configuracion de fuentes RSS - NeuroDiario
 Dominicanas: 30 articulos max (prioridad total)
 Internacionales: 10 articulos max (solo las relevantes para RD pasan el filtro)
 """
-
 FETCH_TIMEOUT = 15
-
 # Dominicanas: limite alto porque todas pasan el filtro
 # Internacionales: limite bajo porque solo las relevantes pasan
 MAX_ARTICLES_PER_SOURCE = 30  # se sobreescribe por fuente abajo
-
 SOURCES = [
     # ─────────────────────────────────────────────
     # MEDIOS DOMINICANOS — prioridad maxima
@@ -48,7 +45,8 @@ SOURCES = [
     },
     {
         "name": "El Nacional",
-        "url": "https://elnacional.com.do/feed/",
+        # URL corregida — /feed/ entraba en loop infinito de redirects
+        "url": "https://elnacional.com.do/rss/home.xml",
         "category": "general",
         "language": "es",
         "active": True,
@@ -56,6 +54,8 @@ SOURCES = [
     },
     {
         "name": "N Digital",
+        # Requiere User-Agent de browser — Cloudflare bloquea bots
+        # El header se aplica en RSSFetcher.fetch_feed()
         "url": "https://n.com.do/feed/",
         "category": "general",
         "language": "es",
@@ -70,7 +70,6 @@ SOURCES = [
         "active": True,
         "max_articles": 30,
     },
-
     # ─────────────────────────────────────────────
     # INTERNACIONALES — limite reducido
     # Solo las relevantes para RD pasan el filtro
@@ -96,7 +95,7 @@ SOURCES = [
         "url": "https://feeds.bloomberg.com/economics/news.rss",
         "category": "economia",
         "language": "en",
-        "active": True,
+        "active": False,  # Da 403 consistentemente — desactivado
         "max_articles": 5,
     },
 ]
