@@ -63,7 +63,7 @@ def _job_facebook_sync():
     try:
         from neurodiario.config.settings import settings
         from neurodiario.db.database import get_db
-        from neurodiario.db.models import GeneratedArticle, Article
+        from neurodiario.db.models import GeneratedArticle
         from neurodiario.publisher.facebook_image_generator import post_to_facebook_with_image
         import requests
 
@@ -71,15 +71,13 @@ def _job_facebook_sync():
         page_id = getattr(settings, 'FACEBOOK_PAGE_ID', None)
 
         if not page_token or not page_id:
-            logger.warning("  📘 Facebook sync: faltan variables FACEBOOK_PAGE_TOKEN o FACEBOOK_PAGE_ID")
+            logger.warning("  📘 Facebook sync: faltan FACEBOOK_PAGE_TOKEN o FACEBOOK_PAGE_ID")
             return
 
         wp_base = settings.WORDPRESS_URL.rstrip('/')
         auth = (settings.WORDPRESS_USER, settings.WORDPRESS_PASSWORD)
 
         with get_db() as db:
-            # Buscar artículos en BD con status "draft" que tienen wordpress_post_id
-            # y que aún no fueron posteados en Facebook
             pending = db.query(GeneratedArticle).filter(
                 GeneratedArticle.status == "draft",
                 GeneratedArticle.wordpress_post_id != None,   # noqa: E711
@@ -94,45 +92,47 @@ def _job_facebook_sync():
 
             for record in pending:
                 try:
-                    # Consultar WordPress para ver si fue aprobado (status = publish)
-                    wp_url = f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}"
-                    response = requests.get(wp_url, auth=auth, timeout=10)
+                    # Consultar WordPress
+                    wp_resp = requests.get(
+                        f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}",
+                        auth=auth,
+                        timeout=10,
+                    )
 
-                    if response.status_code != 200:
-                        logger.debug(f"  WP post {record.wordpress_post_id}: status HTTP {response.status_code}")
+                    if wp_resp.status_code != 200:
+                        logger.debug(f"  WP post {record.wordpress_post_id}: HTTP {wp_resp.status_code}")
                         continue
 
-                    wp_post = response.json()
-                    wp_status = wp_post.get("status", "")
+                    wp_post = wp_resp.json()
 
-                    if wp_status != "publish":
-                        logger.debug(f"  WP post {record.wordpress_post_id}: aún en '{wp_status}' — saltando")
+                    if wp_post.get("status") != "publish":
+                        logger.debug(f"  WP post {record.wordpress_post_id}: aún en '{wp_post.get('status')}' — saltando")
                         continue
 
-                    # ¡Fue aprobado! Actualizar BD y publicar en Facebook
-                    logger.info(f"  ✓ WP post {record.wordpress_post_id} está publicado — enviando a Facebook...")
+                    logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — enviando a Facebook...")
 
                     # Actualizar status en BD
                     record.status = "published"
 
-                    # Obtener image_url del artículo fuente
-                    image_url = None
-                    if record.source_article_id:
-                        source = db.query(Article).filter(
-                            Article.id == record.source_article_id
-                        ).first()
-                        if source:
-                            image_url = source.image_url
+                    # Obtener permalink limpio de WordPress
+                    wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
+                    logger.info(f"  🔗 URL: {wordpress_url}")
 
-                    # Obtener permalink real de WordPress
+                    # Obtener imagen desde WordPress (imagen destacada)
+                    image_url = None
                     try:
-                        wp_resp = requests.get(
-                            f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}",
-                            auth=auth, timeout=10
-                        )
-                        wordpress_url = wp_resp.json().get("link", f"{wp_base}/?p={record.wordpress_post_id}")
-                    except Exception:
-                        wordpress_url = f"{wp_base}/?p={record.wordpress_post_id}"
+                        featured_media_id = wp_post.get("featured_media", 0)
+                        if featured_media_id:
+                            media_resp = requests.get(
+                                f"{wp_base}/wp-json/wp/v2/media/{featured_media_id}",
+                                auth=auth,
+                                timeout=10,
+                            )
+                            if media_resp.status_code == 200:
+                                image_url = media_resp.json().get("source_url")
+                                logger.info(f"  🖼 Imagen de WordPress: {image_url}")
+                    except Exception as e:
+                        logger.warning(f"  🖼 No se pudo obtener imagen de WordPress: {e}")
 
                     # Publicar en Facebook con imagen
                     fb_post_id = post_to_facebook_with_image(
@@ -149,7 +149,7 @@ def _job_facebook_sync():
                         record.facebook_posted_at = datetime.utcnow()
                         logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
                     else:
-                        logger.error(f"  📘 Facebook: falló la publicación del post {record.wordpress_post_id}")
+                        logger.error(f"  📘 Facebook: falló post {record.wordpress_post_id}")
 
                 except Exception as e:
                     logger.error(f"  Error procesando WP post {record.wordpress_post_id}: {e}")
