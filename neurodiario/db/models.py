@@ -56,7 +56,7 @@ class Article(Base):
     raw_content = Column(Text, default="")
     clean_content = Column(Text, default="")
     word_count = Column(Integer, default=0)
-    image_url = Column(String(1000), nullable=True)  # ← NUEVO
+    image_url = Column(String(1000), nullable=True)
 
     # Metadatos de clasificación NLP
     category = Column(String(100), default="general")
@@ -85,7 +85,7 @@ class Trend(Base):
     id = Column(Integer, primary_key=True, index=True)
     topic = Column(String(500), nullable=False)
     article_count = Column(Integer, default=0)
-    sources = Column(JSON, default=list)  # Lista de nombres de medios
+    sources = Column(JSON, default=list)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):
@@ -100,7 +100,7 @@ class GeneratedArticle(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(500), nullable=False)
     content = Column(Text, nullable=False)
-    article_type = Column(String(50), default="summary")  # summary, analysis, digest
+    article_type = Column(String(50), default="summary")
     category = Column(String(100), default="general")
     tags = Column(JSON, default=list)
 
@@ -109,6 +109,10 @@ class GeneratedArticle(Base):
     wordpress_post_id = Column(Integer, nullable=True)
     published_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Facebook
+    facebook_post_id = Column(String(200), nullable=True)   # ← NUEVO
+    facebook_posted_at = Column(DateTime, nullable=True)     # ← NUEVO
 
     # Metadatos del modelo usado
     model_used = Column(String(100), default="claude-opus-4-6")
