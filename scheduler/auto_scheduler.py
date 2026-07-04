@@ -54,8 +54,9 @@ def _job_publishing():
 
 def _job_social_sync():
     """
-    Consulta WordPress para detectar artículos que pasaron de draft a published,
-    actualiza el status en la BD y los publica en Facebook + Telegram.
+    Consulta WordPress para detectar artículos aprobados
+    y los publica en Facebook + Telegram de forma independiente.
+    Cada canal falla o tiene éxito por separado.
     """
     logger.info("=" * 60)
     logger.info("JOB: Sincronización WordPress → Facebook + Telegram")
@@ -67,23 +68,12 @@ def _job_social_sync():
         from neurodiario.publisher.facebook_image_generator import post_to_facebook_with_image
         from neurodiario.publisher.telegram_publisher import post_to_telegram
         import requests
+        from datetime import datetime
 
-        # ── Configuración Facebook ──
         page_token = getattr(settings, 'FACEBOOK_PAGE_TOKEN', None)
         page_id = getattr(settings, 'FACEBOOK_PAGE_ID', None)
-
-        # ── Configuración Telegram ──
         telegram_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', None)
         telegram_channel = getattr(settings, 'TELEGRAM_CHANNEL_ID', None)
-
-        if not page_token or not page_id:
-            logger.warning("  📘 Facebook sync: faltan FACEBOOK_PAGE_TOKEN o FACEBOOK_PAGE_ID")
-
-        if not telegram_token or not telegram_channel:
-            logger.warning("  📱 Telegram sync: faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHANNEL_ID")
-
-        if not (page_token and page_id) and not (telegram_token and telegram_channel):
-            return
 
         wp_base = settings.WORDPRESS_URL.rstrip('/')
         auth = (settings.WORDPRESS_USER, settings.WORDPRESS_PASSWORD)
@@ -92,37 +82,35 @@ def _job_social_sync():
             pending = db.query(GeneratedArticle).filter(
                 GeneratedArticle.status == "draft",
                 GeneratedArticle.wordpress_post_id != None,   # noqa: E711
-                GeneratedArticle.facebook_post_id == None,    # noqa: E711
             ).all()
+
+            pending = [
+                r for r in pending
+                if (page_token and page_id and r.facebook_post_id is None)
+                or (telegram_token and telegram_channel and r.telegram_message_id is None)
+            ]
 
             if not pending:
                 logger.info("  Social sync: sin artículos pendientes.")
                 return
 
-            logger.info(f"  Social sync: verificando {len(pending)} artículo(s) en WordPress...")
+            logger.info(f"  Social sync: {len(pending)} artículo(s) para distribuir...")
 
             for record in pending:
                 try:
-                    # Consultar WordPress para ver si fue aprobado
                     wp_url = f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}"
                     response = requests.get(wp_url, auth=auth, timeout=10)
 
                     if response.status_code != 200:
-                        logger.debug(f"  WP post {record.wordpress_post_id}: HTTP {response.status_code}")
                         continue
 
                     wp_post = response.json()
-                    wp_status = wp_post.get("status", "")
-
-                    if wp_status != "publish":
-                        logger.debug(f"  WP post {record.wordpress_post_id}: aún en '{wp_status}' — saltando")
+                    if wp_post.get("status", "") != "publish":
                         continue
 
                     logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
-
                     record.status = "published"
 
-                    # Obtener image_url del artículo fuente
                     image_url = None
                     if record.source_article_id:
                         source = db.query(Article).filter(
@@ -131,42 +119,45 @@ def _job_social_sync():
                         if source:
                             image_url = source.image_url
 
-                    # Obtener permalink real de WordPress
-                    try:
-                        wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
-                    except Exception:
-                        wordpress_url = f"{wp_base}/?p={record.wordpress_post_id}"
+                    wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
 
-                    # ── FACEBOOK ──
-                    if page_token and page_id:
-                        fb_post_id = post_to_facebook_with_image(
-                            title=record.title,
-                            wordpress_url=wordpress_url,
-                            page_id=page_id,
-                            page_token=page_token,
-                            image_url=image_url,
-                        )
-                        if fb_post_id:
-                            from datetime import datetime
-                            record.facebook_post_id = fb_post_id
-                            record.facebook_posted_at = datetime.utcnow()
-                            logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
-                        else:
-                            logger.error(f"  📘 Facebook: falló el post {record.wordpress_post_id}")
+                    # ── FACEBOOK (independiente) ──
+                    if page_token and page_id and record.facebook_post_id is None:
+                        try:
+                            fb_post_id = post_to_facebook_with_image(
+                                title=record.title,
+                                wordpress_url=wordpress_url,
+                                page_id=page_id,
+                                page_token=page_token,
+                                image_url=image_url,
+                            )
+                            if fb_post_id:
+                                record.facebook_post_id = fb_post_id
+                                record.facebook_posted_at = datetime.utcnow()
+                                logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
+                            else:
+                                logger.error(f"  📘 Facebook: falló WP post {record.wordpress_post_id}")
+                        except Exception as e:
+                            logger.error(f"  📘 Facebook: excepción — {e}")
 
-                    # ── TELEGRAM ──
-                    if telegram_token and telegram_channel:
-                        tg_message_id = post_to_telegram(
-                            title=record.title,
-                            wordpress_url=wordpress_url,
-                            channel_id=telegram_channel,
-                            bot_token=telegram_token,
-                            image_url=image_url,
-                        )
-                        if tg_message_id:
-                            logger.info(f"  📱 Telegram: publicado — message_id {tg_message_id}")
-                        else:
-                            logger.error(f"  📱 Telegram: falló el post {record.wordpress_post_id}")
+                    # ── TELEGRAM (independiente) ──
+                    if telegram_token and telegram_channel and record.telegram_message_id is None:
+                        try:
+                            tg_message_id = post_to_telegram(
+                                title=record.title,
+                                wordpress_url=wordpress_url,
+                                channel_id=telegram_channel,
+                                bot_token=telegram_token,
+                                image_url=image_url,
+                            )
+                            if tg_message_id:
+                                record.telegram_message_id = tg_message_id
+                                record.telegram_posted_at = datetime.utcnow()
+                                logger.info(f"  📱 Telegram: publicado — message_id {tg_message_id}")
+                            else:
+                                logger.error(f"  📱 Telegram: falló WP post {record.wordpress_post_id}")
+                        except Exception as e:
+                            logger.error(f"  📱 Telegram: excepción — {e}")
 
                 except Exception as e:
                     logger.error(f"  Error procesando WP post {record.wordpress_post_id}: {e}")
