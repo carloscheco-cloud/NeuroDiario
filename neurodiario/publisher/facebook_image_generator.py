@@ -8,9 +8,10 @@ import io
 import logging
 import os
 import tempfile
-import urllib.request
 from pathlib import Path
 from typing import Optional
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,17 @@ LIGHT_BLUE = (96, 165, 250)
 
 FAVICON_PATH = Path(__file__).resolve().parent / "assets" / "favicon_nd.png"
 FONT_BOLD    = str(Path(__file__).resolve().parent / "assets" / "DejaVuSans-Bold.ttf")
+
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    "Accept-Language": "es-ES,es;q=0.9",
+    "Referer": "https://neurodiario.com/",
+}
 
 
 def _get_fonts():
@@ -56,18 +68,16 @@ def _wrap_text(draw, text, font, max_width):
 
 
 def _clean_title(title: str) -> str:
-    """Decodifica entidades HTML y limpia el título."""
     return html.unescape(title).strip()
 
 
 def _download_image(url: str):
+    """Descarga imagen usando requests con headers de browser."""
     try:
         from PIL import Image
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = r.read()
-        img = Image.open(io.BytesIO(data)).convert("RGB")
+        r = requests.get(url, headers=BROWSER_HEADERS, timeout=15)
+        r.raise_for_status()
+        img = Image.open(io.BytesIO(r.content)).convert("RGB")
         logger.info(f"  🖼 Imagen descargada: {url[:70]}")
         return img
     except Exception as e:
@@ -103,11 +113,14 @@ def generate_facebook_image(title: str, image_url: Optional[str] = None) -> Opti
     try:
         from PIL import Image, ImageDraw
 
-        # Limpiar título — decodificar entidades HTML (&amp; &#37; etc.)
         title = _clean_title(title)
 
         # 1. Fondo
         foto = _download_image(image_url) if image_url else None
+        if foto:
+            logger.info(f"  🖼 Usando imagen de fondo: {image_url[:60]}...")
+        else:
+            logger.info("  🖼 Sin imagen de fondo — usando fallback oscuro")
         bg = foto.resize((FB_W, FB_H), Image.LANCZOS) if foto else _make_fallback()
 
         # 2. Overlay oscuro
@@ -122,21 +135,19 @@ def generate_facebook_image(title: str, image_url: Optional[str] = None) -> Opti
         # 4. Fuentes
         font_lg, font_md, font_nd, font_url = _get_fonts()
 
-        # 5. Título — grande si ≤3 líneas, mediano si >3
+        # 5. Título
         lines = _wrap_text(draw, title, font_lg, FB_W - 80)
         font_title, line_h = font_lg, 74
         if len(lines) > 3:
             lines = _wrap_text(draw, title, font_md, FB_W - 80)
             font_title, line_h = font_md, 64
 
-        # Máx 4 líneas con "..."
         if len(lines) > 4:
             lines = lines[:4]
             while draw.textbbox((0, 0), lines[-1] + "...", font=font_title)[2] > FB_W - 80 and len(lines[-1]) > 5:
                 lines[-1] = lines[-1].rsplit(" ", 1)[0]
             lines[-1] += "..."
 
-        # Posición: pegado arriba de la barra
         y_title = FB_H - BAR_H - len(lines) * line_h - 28
         for line in lines:
             draw.text((42, y_title + 3), line, font=font_title, fill=(0, 0, 0))
@@ -189,16 +200,12 @@ def post_to_facebook_with_image(
     Publica en Facebook usando /photos con caption — imagen grande en el feed.
     Retorna el post_id o None.
     """
-    import requests
-
-    # Limpiar título para el caption
     clean_title = _clean_title(title)
 
     # 1. Generar imagen
     image_path = generate_facebook_image(title=clean_title, image_url=image_url)
 
     if not image_path:
-        # Fallback: solo link
         logger.warning("  📘 Sin imagen — publicando solo link")
         try:
             r = requests.post(
@@ -215,7 +222,7 @@ def post_to_facebook_with_image(
             logger.error(f"  📘 Error publicando fallback: {e}")
             return None
 
-    # 2. Publicar con /photos — imagen grande en el feed
+    # 2. Publicar con /photos
     try:
         caption = f"📰 {clean_title}\n\n🔗 Lee la nota completa:\n{wordpress_url}"
 
