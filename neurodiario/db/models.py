@@ -111,8 +111,12 @@ class GeneratedArticle(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Facebook
-    facebook_post_id = Column(String(200), nullable=True)   # ← NUEVO
-    facebook_posted_at = Column(DateTime, nullable=True)     # ← NUEVO
+    facebook_post_id = Column(String(200), nullable=True)
+    facebook_posted_at = Column(DateTime, nullable=True)
+
+    # Telegram
+    telegram_message_id = Column(String(50), nullable=True)
+    telegram_posted_at = Column(DateTime, nullable=True)
 
     # Metadatos del modelo usado
     model_used = Column(String(100), default="claude-opus-4-6")
