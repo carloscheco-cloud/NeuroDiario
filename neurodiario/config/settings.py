@@ -29,6 +29,10 @@ class Settings:
     CLAUDE_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", os.getenv("CLAUDE_API_KEY", ""))
     CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
+    # ── Facebook ───────────────────────────────────────────────────────────────
+    FACEBOOK_PAGE_TOKEN: str = os.getenv("FACEBOOK_PAGE_TOKEN", "")
+    FACEBOOK_PAGE_ID: str = os.getenv("FACEBOOK_PAGE_ID", "")
+
     # ── Aplicación ─────────────────────────────────────────────────────────────
     DEBUG: bool = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
