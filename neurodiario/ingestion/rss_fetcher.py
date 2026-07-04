@@ -14,6 +14,19 @@ from .sources_config import SOURCES, FETCH_TIMEOUT, MAX_ARTICLES_PER_SOURCE
 
 logger = logging.getLogger(__name__)
 
+# User-Agent de browser real para fuentes que bloquean bots (ej. N Digital con Cloudflare)
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+BROWSER_HEADERS = {
+    "User-Agent": BROWSER_USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "es-ES,es;q=0.9",
+}
+
 
 class RSSFetcher:
     """Obtiene y normaliza artículos desde feeds RSS de medios dominicanos."""
@@ -28,7 +41,7 @@ class RSSFetcher:
         try:
             response = requests.get(
                 source["url"],
-                headers={"User-Agent": "NeuroDiario/1.0"},
+                headers=BROWSER_HEADERS,  # Browser UA — funciona para todos los sitios
                 timeout=self.timeout,
             )
             response.raise_for_status()
@@ -36,7 +49,8 @@ class RSSFetcher:
             if feed.bozo:
                 logger.warning(f"Feed con errores de parseo: {source['name']}")
 
-            for entry in feed.entries[: self.max_articles]:
+            limit = source.get("max_articles", self.max_articles)
+            for entry in feed.entries[:limit]:
                 article = self._normalize_entry(entry, source)
                 if article:
                     articles.append(article)
@@ -87,7 +101,7 @@ class RSSFetcher:
                 "category": source.get("category", "general"),
                 "language": source.get("language", "es"),
                 "raw_content": "",  # Se llena en ArticleParser
-                "image_url": self._extract_image(entry),  # ← NUEVO
+                "image_url": self._extract_image(entry),
             }
         except Exception as e:
             logger.error(f"Error normalizando entrada: {e}")
@@ -136,7 +150,7 @@ class RSSFetcher:
                 word_count=data.get("word_count", 0),
                 published_at=data.get("published_at"),
                 source_id=source_cache.get(source_name),
-                image_url=data.get("image_url") or None,  # ← NUEVO
+                image_url=data.get("image_url") or None,
             )
             db_session.add(article)
             saved += 1
