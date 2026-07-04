@@ -124,7 +124,15 @@ def _job_facebook_sync():
                         if source:
                             image_url = source.image_url
 
-                    wordpress_url = f"{wp_base}/?p={record.wordpress_post_id}"
+                    # Obtener permalink real de WordPress
+                    try:
+                        wp_resp = requests.get(
+                            f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}",
+                            auth=auth, timeout=10
+                        )
+                        wordpress_url = wp_resp.json().get("link", f"{wp_base}/?p={record.wordpress_post_id}")
+                    except Exception:
+                        wordpress_url = f"{wp_base}/?p={record.wordpress_post_id}"
 
                     # Publicar en Facebook con imagen
                     fb_post_id = post_to_facebook_with_image(
