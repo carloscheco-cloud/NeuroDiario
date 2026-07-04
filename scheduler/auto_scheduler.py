@@ -5,7 +5,7 @@ Intervalos:
 - Cada 3 min:  Ingesta RSS
 - Cada 6 min:  Procesamiento NLP
 - Cada 8 min:  Generación + Publicación (10 artículos por ciclo)
-- Cada 5 min:  Sincronización WordPress → Facebook
+- Cada 5 min:  Sincronización WordPress → Facebook + Telegram
 """
 import logging
 import time
@@ -52,121 +52,129 @@ def _job_publishing():
         logger.error(f"ERROR EN PUBLICACIÓN: {e}", exc_info=True)
 
 
-def _job_facebook_sync():
+def _job_social_sync():
     """
-    Busca en WordPress posts publicados en los últimos 30 minutos,
-    cruza con la BD, y publica en Facebook los que no tienen facebook_post_id.
+    Consulta WordPress para detectar artículos que pasaron de draft a published,
+    actualiza el status en la BD y los publica en Facebook + Telegram.
     """
     logger.info("=" * 60)
-    logger.info("JOB: Sincronización WordPress → Facebook")
+    logger.info("JOB: Sincronización WordPress → Facebook + Telegram")
     logger.info("=" * 60)
     try:
         from neurodiario.config.settings import settings
         from neurodiario.db.database import get_db
-        from neurodiario.db.models import GeneratedArticle
+        from neurodiario.db.models import GeneratedArticle, Article
         from neurodiario.publisher.facebook_image_generator import post_to_facebook_with_image
-        from datetime import datetime, timedelta
+        from neurodiario.publisher.telegram_publisher import post_to_telegram
         import requests
 
+        # ── Configuración Facebook ──
         page_token = getattr(settings, 'FACEBOOK_PAGE_TOKEN', None)
         page_id = getattr(settings, 'FACEBOOK_PAGE_ID', None)
 
+        # ── Configuración Telegram ──
+        telegram_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', None)
+        telegram_channel = getattr(settings, 'TELEGRAM_CHANNEL_ID', None)
+
         if not page_token or not page_id:
             logger.warning("  📘 Facebook sync: faltan FACEBOOK_PAGE_TOKEN o FACEBOOK_PAGE_ID")
+
+        if not telegram_token or not telegram_channel:
+            logger.warning("  📱 Telegram sync: faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHANNEL_ID")
+
+        if not (page_token and page_id) and not (telegram_token and telegram_channel):
             return
 
         wp_base = settings.WORDPRESS_URL.rstrip('/')
         auth = (settings.WORDPRESS_USER, settings.WORDPRESS_PASSWORD)
 
-        # Buscar en WordPress posts publicados en los últimos 30 minutos
-        after = (datetime.utcnow() - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
-        wp_resp = requests.get(
-            f"{wp_base}/wp-json/wp/v2/posts",
-            params={
-                "status": "publish",
-                "after": after,
-                "per_page": 10,
-                "orderby": "date",
-                "order": "desc",
-            },
-            auth=auth,
-            timeout=15,
-        )
-
-        if wp_resp.status_code != 200:
-            logger.warning(f"  📘 WordPress respondió {wp_resp.status_code}")
-            return
-
-        recent_posts = wp_resp.json()
-
-        if not recent_posts:
-            logger.info("  📘 Facebook sync: no hay posts publicados en los últimos 30 min.")
-            return
-
-        logger.info(f"  📘 Facebook sync: {len(recent_posts)} post(s) publicados recientemente en WordPress...")
-
         with get_db() as db:
-            for wp_post in recent_posts:
-                wp_post_id = wp_post.get("id")
-                try:
-                    # Buscar en BD por wordpress_post_id
-                    record = db.query(GeneratedArticle).filter(
-                        GeneratedArticle.wordpress_post_id == wp_post_id,
-                        GeneratedArticle.facebook_post_id == None,  # noqa: E711
-                    ).first()
+            pending = db.query(GeneratedArticle).filter(
+                GeneratedArticle.status == "draft",
+                GeneratedArticle.wordpress_post_id != None,   # noqa: E711
+                GeneratedArticle.facebook_post_id == None,    # noqa: E711
+            ).all()
 
-                    if not record:
-                        logger.debug(f"  WP post {wp_post_id}: no está en BD o ya fue posteado en FB")
+            if not pending:
+                logger.info("  Social sync: sin artículos pendientes.")
+                return
+
+            logger.info(f"  Social sync: verificando {len(pending)} artículo(s) en WordPress...")
+
+            for record in pending:
+                try:
+                    # Consultar WordPress para ver si fue aprobado
+                    wp_url = f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}"
+                    response = requests.get(wp_url, auth=auth, timeout=10)
+
+                    if response.status_code != 200:
+                        logger.debug(f"  WP post {record.wordpress_post_id}: HTTP {response.status_code}")
                         continue
 
-                    logger.info(f"  ✓ WP post {wp_post_id} — enviando a Facebook...")
+                    wp_post = response.json()
+                    wp_status = wp_post.get("status", "")
 
-                    # Actualizar status en BD
+                    if wp_status != "publish":
+                        logger.debug(f"  WP post {record.wordpress_post_id}: aún en '{wp_status}' — saltando")
+                        continue
+
+                    logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
+
                     record.status = "published"
 
-                    # Permalink limpio
-                    wordpress_url = wp_post.get("link", f"{wp_base}/?p={wp_post_id}")
-                    logger.info(f"  🔗 URL: {wordpress_url}")
-
-                    # Imagen destacada de WordPress
+                    # Obtener image_url del artículo fuente
                     image_url = None
+                    if record.source_article_id:
+                        source = db.query(Article).filter(
+                            Article.id == record.source_article_id
+                        ).first()
+                        if source:
+                            image_url = source.image_url
+
+                    # Obtener permalink real de WordPress
                     try:
-                        featured_media_id = wp_post.get("featured_media", 0)
-                        if featured_media_id:
-                            media_resp = requests.get(
-                                f"{wp_base}/wp-json/wp/v2/media/{featured_media_id}",
-                                auth=auth,
-                                timeout=10,
-                            )
-                            if media_resp.status_code == 200:
-                                image_url = media_resp.json().get("source_url")
-                                logger.info(f"  🖼 Imagen: {image_url}")
-                    except Exception as e:
-                        logger.warning(f"  🖼 No se pudo obtener imagen: {e}")
+                        wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
+                    except Exception:
+                        wordpress_url = f"{wp_base}/?p={record.wordpress_post_id}"
 
-                    # Publicar en Facebook
-                    fb_post_id = post_to_facebook_with_image(
-                        title=record.title,
-                        wordpress_url=wordpress_url,
-                        page_id=page_id,
-                        page_token=page_token,
-                        image_url=image_url,
-                    )
+                    # ── FACEBOOK ──
+                    if page_token and page_id:
+                        fb_post_id = post_to_facebook_with_image(
+                            title=record.title,
+                            wordpress_url=wordpress_url,
+                            page_id=page_id,
+                            page_token=page_token,
+                            image_url=image_url,
+                        )
+                        if fb_post_id:
+                            from datetime import datetime
+                            record.facebook_post_id = fb_post_id
+                            record.facebook_posted_at = datetime.utcnow()
+                            logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
+                        else:
+                            logger.error(f"  📘 Facebook: falló el post {record.wordpress_post_id}")
 
-                    if fb_post_id:
-                        record.facebook_post_id = fb_post_id
-                        record.facebook_posted_at = datetime.utcnow()
-                        logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
-                    else:
-                        logger.error(f"  📘 Facebook: falló post {wp_post_id}")
+                    # ── TELEGRAM ──
+                    if telegram_token and telegram_channel:
+                        tg_message_id = post_to_telegram(
+                            title=record.title,
+                            wordpress_url=wordpress_url,
+                            channel_id=telegram_channel,
+                            bot_token=telegram_token,
+                            image_url=image_url,
+                        )
+                        if tg_message_id:
+                            logger.info(f"  📱 Telegram: publicado — message_id {tg_message_id}")
+                        else:
+                            logger.error(f"  📱 Telegram: falló el post {record.wordpress_post_id}")
 
                 except Exception as e:
-                    logger.error(f"  Error procesando WP post {wp_post_id}: {e}")
+                    logger.error(f"  Error procesando WP post {record.wordpress_post_id}: {e}")
 
             db.commit()
 
     except Exception as e:
-        logger.error(f"ERROR EN FACEBOOK SYNC: {e}", exc_info=True)
+        logger.error(f"ERROR EN SOCIAL SYNC: {e}", exc_info=True)
 
 
 def start_scheduler() -> BackgroundScheduler:
@@ -175,7 +183,7 @@ def start_scheduler() -> BackgroundScheduler:
     logger.info("  Ingesta RSS:    cada 3 minutos")
     logger.info("  NLP:            cada 6 minutos")
     logger.info("  Publicación:    cada 8 minutos (10 artículos)")
-    logger.info("  Facebook sync:  cada 5 minutos")
+    logger.info("  Social sync:    cada 5 minutos (Facebook + Telegram)")
     logger.info("=" * 60)
 
     scheduler = BackgroundScheduler()
@@ -208,11 +216,11 @@ def start_scheduler() -> BackgroundScheduler:
     )
 
     scheduler.add_job(
-        _job_facebook_sync,
+        _job_social_sync,
         trigger="interval",
         minutes=5,
-        id="facebook_sync",
-        name="Sincronización WordPress→Facebook",
+        id="social_sync",
+        name="Sincronización WordPress→Facebook+Telegram",
         replace_existing=True,
     )
 
