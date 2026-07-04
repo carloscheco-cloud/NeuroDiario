@@ -54,8 +54,8 @@ def _job_publishing():
 
 def _job_facebook_sync():
     """
-    Consulta WordPress para detectar artículos que pasaron de draft a published,
-    actualiza el status en la BD y los publica en Facebook con imagen.
+    Busca en WordPress posts publicados en los últimos 30 minutos,
+    cruza con la BD, y publica en Facebook los que no tienen facebook_post_id.
     """
     logger.info("=" * 60)
     logger.info("JOB: Sincronización WordPress → Facebook")
@@ -65,6 +65,7 @@ def _job_facebook_sync():
         from neurodiario.db.database import get_db
         from neurodiario.db.models import GeneratedArticle
         from neurodiario.publisher.facebook_image_generator import post_to_facebook_with_image
+        from datetime import datetime, timedelta
         import requests
 
         page_token = getattr(settings, 'FACEBOOK_PAGE_TOKEN', None)
@@ -77,48 +78,57 @@ def _job_facebook_sync():
         wp_base = settings.WORDPRESS_URL.rstrip('/')
         auth = (settings.WORDPRESS_USER, settings.WORDPRESS_PASSWORD)
 
+        # Buscar en WordPress posts publicados en los últimos 30 minutos
+        after = (datetime.utcnow() - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+        wp_resp = requests.get(
+            f"{wp_base}/wp-json/wp/v2/posts",
+            params={
+                "status": "publish",
+                "after": after,
+                "per_page": 10,
+                "orderby": "date",
+                "order": "desc",
+            },
+            auth=auth,
+            timeout=15,
+        )
+
+        if wp_resp.status_code != 200:
+            logger.warning(f"  📘 WordPress respondió {wp_resp.status_code}")
+            return
+
+        recent_posts = wp_resp.json()
+
+        if not recent_posts:
+            logger.info("  📘 Facebook sync: no hay posts publicados en los últimos 30 min.")
+            return
+
+        logger.info(f"  📘 Facebook sync: {len(recent_posts)} post(s) publicados recientemente en WordPress...")
+
         with get_db() as db:
-            pending = db.query(GeneratedArticle).filter(
-                GeneratedArticle.status == "draft",
-                GeneratedArticle.wordpress_post_id != None,   # noqa: E711
-                GeneratedArticle.facebook_post_id == None,    # noqa: E711
-            ).all()
-
-            if not pending:
-                logger.info("  📘 Facebook sync: sin artículos pendientes.")
-                return
-
-            logger.info(f"  📘 Facebook sync: verificando {len(pending)} artículo(s) en WordPress...")
-
-            for record in pending:
+            for wp_post in recent_posts:
+                wp_post_id = wp_post.get("id")
                 try:
-                    # Consultar WordPress
-                    wp_resp = requests.get(
-                        f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}",
-                        auth=auth,
-                        timeout=10,
-                    )
+                    # Buscar en BD por wordpress_post_id
+                    record = db.query(GeneratedArticle).filter(
+                        GeneratedArticle.wordpress_post_id == wp_post_id,
+                        GeneratedArticle.facebook_post_id == None,  # noqa: E711
+                    ).first()
 
-                    if wp_resp.status_code != 200:
-                        logger.debug(f"  WP post {record.wordpress_post_id}: HTTP {wp_resp.status_code}")
+                    if not record:
+                        logger.debug(f"  WP post {wp_post_id}: no está en BD o ya fue posteado en FB")
                         continue
 
-                    wp_post = wp_resp.json()
-
-                    if wp_post.get("status") != "publish":
-                        logger.debug(f"  WP post {record.wordpress_post_id}: aún en '{wp_post.get('status')}' — saltando")
-                        continue
-
-                    logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — enviando a Facebook...")
+                    logger.info(f"  ✓ WP post {wp_post_id} — enviando a Facebook...")
 
                     # Actualizar status en BD
                     record.status = "published"
 
-                    # Obtener permalink limpio de WordPress
-                    wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
+                    # Permalink limpio
+                    wordpress_url = wp_post.get("link", f"{wp_base}/?p={wp_post_id}")
                     logger.info(f"  🔗 URL: {wordpress_url}")
 
-                    # Obtener imagen desde WordPress (imagen destacada)
+                    # Imagen destacada de WordPress
                     image_url = None
                     try:
                         featured_media_id = wp_post.get("featured_media", 0)
@@ -130,11 +140,11 @@ def _job_facebook_sync():
                             )
                             if media_resp.status_code == 200:
                                 image_url = media_resp.json().get("source_url")
-                                logger.info(f"  🖼 Imagen de WordPress: {image_url}")
+                                logger.info(f"  🖼 Imagen: {image_url}")
                     except Exception as e:
-                        logger.warning(f"  🖼 No se pudo obtener imagen de WordPress: {e}")
+                        logger.warning(f"  🖼 No se pudo obtener imagen: {e}")
 
-                    # Publicar en Facebook con imagen
+                    # Publicar en Facebook
                     fb_post_id = post_to_facebook_with_image(
                         title=record.title,
                         wordpress_url=wordpress_url,
@@ -144,15 +154,14 @@ def _job_facebook_sync():
                     )
 
                     if fb_post_id:
-                        from datetime import datetime
                         record.facebook_post_id = fb_post_id
                         record.facebook_posted_at = datetime.utcnow()
                         logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
                     else:
-                        logger.error(f"  📘 Facebook: falló post {record.wordpress_post_id}")
+                        logger.error(f"  📘 Facebook: falló post {wp_post_id}")
 
                 except Exception as e:
-                    logger.error(f"  Error procesando WP post {record.wordpress_post_id}: {e}")
+                    logger.error(f"  Error procesando WP post {wp_post_id}: {e}")
 
             db.commit()
 
