@@ -1,87 +1,96 @@
 """
 Modulo de clasificacion tematica de articulos.
 Asigna categorias (politica, economia, deportes, etc.) a cada articulo.
+
+Estrategia (Opción 1 + corrección):
+  1. Si la fuente declara una categoría ESPECÍFICA y confiable
+     (deportes, economia, salud...), se usa directamente — gratis.
+  2. Si la fuente es genérica (general/portada) o dudosa, se consulta
+     a Claude Haiku para clasificar con precisión.
+  3. Si Haiku no está disponible (sin API key o error), cae al método
+     de palabras clave como respaldo.
+
+Esto arregla el bug donde casi todo terminaba en "politica" por el
+conteo ingenuo de substrings.
 """
 
 import logging
+import os
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Categorías válidas del sistema
+CATEGORIAS_VALIDAS = [
+    "politica", "economia", "deportes", "salud", "tecnologia",
+    "cultura", "educacion", "internacional", "sociedad", "general",
+]
+
+# Categorías de fuente en las que confiamos DIRECTAMENTE (sin Haiku).
+# Son secciones específicas donde el medio ya clasificó bien.
+CATEGORIAS_FUENTE_CONFIABLES = {
+    "politica", "economia", "deportes", "salud",
+    "tecnologia", "cultura", "educacion",
+}
+
+# Categorías de fuente GENÉRICAS o ambiguas → siempre verificar con Haiku.
+CATEGORIAS_FUENTE_DUDOSAS = {"general", "internacional", "sociedad", "", None}
+
+
 # ─────────────────────────────────────────────────────────────
-# PALABRAS CLAVE POR CATEGORIA
-# Mas especificas para evitar colisiones entre categorias
-# El titulo pesa el doble que el cuerpo
+# PALABRAS CLAVE (RESPALDO cuando Haiku no está disponible)
 # ─────────────────────────────────────────────────────────────
 CATEGORY_KEYWORDS: Dict[str, List[str]] = {
     "politica": [
         "gobierno", "presidente", "congreso", "senado", "diputado",
-        "partido politico", "elecciones", "ministro", "decreto", "ley",
-        "constitución", "abinader", "legislativo", "ejecutivo", "judicial",
-        "gobernador", "alcalde", "ayuntamiento", "procurador", "fiscal",
-        "poder ejecutivo", "poder legislativo", "poder judicial",
-        "pld", "prm", "fuerza del pueblo", "reforma", "politica dominicana",
-        "canciller", "cancillería", "diplomacia dominicana",
+        "partido politico", "elecciones", "ministro", "decreto",
+        "constitución", "abinader", "legislativo", "ejecutivo",
+        "gobernador", "alcalde", "ayuntamiento", "procurador",
+        "pld", "prm", "fuerza del pueblo", "reforma fiscal",
+        "canciller", "cancillería",
     ],
     "economia": [
-        "economía dominicana", "peso dominicano", "dólar", "inflación",
+        "economía dominicana", "peso dominicano", "inflación",
         "pib dominicano", "banco central", "inversión extranjera",
-        "exportaciones dominicanas", "importaciones", "empleo dominicano",
-        "desempleo", "hacienda", "presupuesto nacional", "deuda publica",
-        "zona franca", "turismo dominicano", "remesas", "tipo de cambio",
-        "banreservas", "popular", "bhd", "reservas internacionales",
-        "crecimiento económico", "recaudaciones", "dgii", "aduanas",
+        "exportaciones", "importaciones", "desempleo", "hacienda",
+        "presupuesto nacional", "zona franca", "remesas", "tipo de cambio",
+        "banreservas", "reservas internacionales", "recaudaciones", "dgii",
     ],
     "deportes": [
-        "béisbol dominicano", "lidom", "grandes ligas", "mlb",
-        "pelotero dominicano", "home run", "pitcher", "lanzador", "bateador",
-        "yankees", "dodgers", "medias rojas", "padres", "astros",
-        "clásico mundial", "clasico mundial", "licey", "escogido",
-        "águilas cibaeñas", "estrellas orientales", "toros del este",
-        "baloncesto dominicano", "lnb", "atletismo dominicano",
-        "boxeo", "campeón mundial", "campeonato dominicano",
-        "futbol dominicano", "selección dominicana", "deporte dominicano",
+        "béisbol", "lidom", "grandes ligas", "mlb", "pelotero",
+        "home run", "pitcher", "lanzador", "bateador", "licey",
+        "escogido", "águilas cibaeñas", "estrellas orientales",
+        "baloncesto", "atletismo", "boxeo", "campeonato", "selección dominicana",
     ],
     "salud": [
-        "salud dominicana", "hospital dominicano", "médico", "enfermedad",
-        "vacuna", "paciente", "ministerio de salud", "epidemia", "dengue",
-        "covid", "tratamiento médico", "sns", "seguro médico", "idss",
-        "aborto", "maternidad", "salud publica", "farmacia", "medicamento",
+        "hospital", "médico", "enfermedad", "vacuna", "paciente",
+        "ministerio de salud", "epidemia", "dengue", "covid",
+        "sns", "seguro médico", "medicamento", "salud publica",
     ],
     "tecnologia": [
-        "tecnología", "internet dominicano", "digital", "software",
-        "aplicacion", "startup dominicana", "inteligencia artificial",
-        "ciberseguridad", "datos", "innovación tecnológica",
-        "indotel", "telecomunicaciones", "banda ancha", "fibra optica",
+        "tecnología", "internet", "software", "aplicacion", "startup",
+        "inteligencia artificial", "ciberseguridad", "indotel",
+        "telecomunicaciones", "banda ancha", "fibra optica",
     ],
     "cultura": [
-        "cultura dominicana", "arte dominicano", "música dominicana",
-        "cine dominicano", "teatro dominicano", "festival dominicano",
-        "literatura dominicana", "merengue", "bachata", "patrimonio dominicano",
-        "artista dominicano", "carnaval dominicano", "gastronomia dominicana",
-        "cultura popular", "folclore dominicano",
+        "arte", "música dominicana", "cine dominicano", "teatro",
+        "festival", "literatura", "merengue", "bachata", "carnaval",
+        "gastronomia", "folclore",
     ],
     "educacion": [
-        "educación dominicana", "escuela dominicana", "universidad dominicana",
-        "estudiante", "docente dominicano", "minerd", "maestro dominicano",
-        "aula", "currículo", "beca dominicana", "uasd", "pucmm", "intec",
-        "año escolar", "tanda extendida", "jornada escolar",
+        "educación", "escuela", "universidad", "estudiante", "docente",
+        "minerd", "maestro", "beca", "uasd", "pucmm", "año escolar",
+        "tanda extendida",
     ],
     "internacional": [
-        "guerra", "conflicto armado", "bombardeo", "ataque militar",
-        "iran", "israel", "ucrania", "rusia", "oriente proximo", "medio oriente",
-        "onu", "oea", "otan", "biden", "trump", "xi jinping",
-        "haiti", "venezuela", "cuba", "colombia", "mexico", "argentina",
-        "estados unidos", "europa", "asia", "africa",
-        "refugiados", "paz", "tratado internacional", "cumbre mundial",
-        "banco mundial", "fmi", "g20", "g7",
+        "guerra", "conflicto armado", "bombardeo", "iran", "israel",
+        "ucrania", "rusia", "onu", "otan", "haiti", "venezuela", "cuba",
+        "estados unidos", "refugiados", "tratado internacional", "fmi",
     ],
     "sociedad": [
-        "crimen", "homicidio", "robo", "seguridad ciudadana",
-        "feminicidio", "violencia", "accidente", "catástrofe",
-        "inundación dominicana", "damnificados", "coe", "defensa civil",
-        "comunidad dominicana", "barrio", "pobreza", "desigualdad",
-        "migracion dominicana", "deportados", "haitiano en rd",
+        "crimen", "homicidio", "robo", "seguridad ciudadana", "feminicidio",
+        "violencia", "accidente", "inundación", "damnificados", "coe",
+        "defensa civil", "pobreza", "migracion", "deportados",
     ],
 }
 
@@ -89,43 +98,107 @@ CATEGORY_KEYWORDS: Dict[str, List[str]] = {
 class ArticleClassifier:
     """Clasifica articulos de noticias por tematica."""
 
-    def __init__(self, method: str = "keyword"):
+    def __init__(self, method: str = "hybrid", api_key: Optional[str] = None, model: Optional[str] = None):
         self.method = method
-        self._model = None
+        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
+        self.model = model or os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+        self._client = None
 
-    def classify(self, text: str, title: str = "") -> Tuple[str, float]:
-        if self.method == "keyword":
-            return self._classify_by_keywords(text, title)
-        raise NotImplementedError(f"Metodo '{self.method}' no implementado aun")
+    def _get_client(self):
+        if self._client is None and self.api_key:
+            import anthropic
+            self._client = anthropic.Anthropic(api_key=self.api_key)
+        return self._client
 
-    def classify_article(self, title: str, content: str) -> Tuple[str, float]:
-        return self.classify(text=content, title=title)
+    def classify(self, text: str, title: str = "", source_category: Optional[str] = None) -> Tuple[str, float]:
+        """
+        Clasifica un artículo.
+        - Si source_category es una sección confiable, se usa directo.
+        - Si es dudosa/genérica, se consulta a Haiku.
+        - Si Haiku falla, cae a palabras clave.
+        """
+        sc = (source_category or "").lower().strip()
+
+        # 1. Confiar en secciones específicas de la fuente
+        if sc in CATEGORIAS_FUENTE_CONFIABLES:
+            return sc, 1.0
+
+        # 2. Fuente dudosa/genérica → intentar Haiku
+        if self.api_key:
+            cat_haiku = self._classify_with_haiku(title, text)
+            if cat_haiku:
+                return cat_haiku, 0.95
+
+        # 3. Respaldo: palabras clave
+        return self._classify_by_keywords(text, title)
+
+    def classify_article(self, title: str, content: str, source_category: Optional[str] = None) -> Tuple[str, float]:
+        return self.classify(text=content, title=title, source_category=source_category)
 
     def classify_batch(self, articles: List[Dict]) -> List[Dict]:
         for article in articles:
             category, confidence = self.classify(
-                article.get("raw_content", ""),
+                article.get("raw_content", "") or article.get("clean_content", ""),
                 article.get("title", ""),
+                article.get("category"),  # categoría que trae la fuente
             )
             article["category"] = category
             article["category_confidence"] = confidence
         return articles
 
+    def _classify_with_haiku(self, title: str, text: str) -> Optional[str]:
+        """Clasifica con Claude Haiku. Devuelve la categoría o None si falla."""
+        try:
+            client = self._get_client()
+            if not client:
+                return None
+
+            # Limitar el texto para no gastar tokens de más
+            fragmento = (text or "")[:600]
+            categorias_str = ", ".join(CATEGORIAS_VALIDAS)
+
+            prompt = f"""Clasifica esta noticia dominicana en UNA sola categoría.
+
+Categorías válidas: {categorias_str}
+
+Titular: {title}
+Extracto: {fragmento}
+
+Responde SOLO con el nombre exacto de la categoría, en minúsculas, sin explicación."""
+
+            message = client.messages.create(
+                model=self.model,
+                max_tokens=10,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            respuesta = message.content[0].text.strip().lower()
+
+            # Validar que sea una categoría real
+            for cat in CATEGORIAS_VALIDAS:
+                if cat in respuesta:
+                    return cat
+            return None
+
+        except Exception as e:
+            logger.warning(f"Haiku no pudo clasificar ({e}); usando respaldo")
+            return None
+
     def _classify_by_keywords(self, text: str, title: str) -> Tuple[str, float]:
         """
-        Clasifica usando conteo de palabras clave por categoria.
-        El titulo pesa 3 veces mas que el cuerpo para mayor precision.
-        Las frases de dos palabras tienen mas peso que palabras sueltas.
+        RESPALDO: clasifica por palabras clave.
+        Mejora vs versión anterior: usa límites de palabra para no contar
+        substrings dentro de otras palabras (el bug de 'ley' dentro de otras).
         """
-        # Titulo tiene peso x3 para mayor precision
+        import re
         combined = f"{title} {title} {title} {text}".lower()
         scores: Dict[str, int] = {}
 
         for category, keywords in CATEGORY_KEYWORDS.items():
             score = 0
             for kw in keywords:
-                count = combined.count(kw.lower())
-                # Frases de mas de una palabra tienen peso doble
+                # \b = límite de palabra: cuenta "ley" pero no dentro de "leyenda"
+                patron = r"\b" + re.escape(kw.lower()) + r"\b"
+                count = len(re.findall(patron, combined))
                 weight = 2 if len(kw.split()) > 1 else 1
                 score += count * weight
             scores[category] = score
@@ -136,5 +209,4 @@ class ArticleClassifier:
         best_category = max(scores, key=lambda k: scores[k])
         total = sum(scores.values())
         confidence = scores[best_category] / total if total > 0 else 0.0
-
         return best_category, round(confidence, 3)
