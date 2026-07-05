@@ -6,6 +6,7 @@ Intervalos:
 - Cada 6 min:  Procesamiento NLP
 - Cada 8 min:  Generación + Publicación (10 artículos por ciclo)
 - Cada 5 min:  Sincronización WordPress → Facebook + Telegram
+- Domingos 8am RD: Newsletter Semanal
 """
 import logging
 import time
@@ -52,14 +53,9 @@ def _job_publishing():
         logger.error(f"ERROR EN PUBLICACIÓN: {e}", exc_info=True)
 
 
-def _get_wordpress_image_url(wp_base: str, auth: tuple, wp_post_id: int) -> str | None:
-    """
-    Obtiene la URL de la imagen destacada de un post de WordPress.
-    Retorna la URL de la imagen o None si no tiene.
-    """
+def _get_wordpress_image_url(wp_base: str, auth: tuple, wp_post_id: int):
     import requests
     try:
-        # Obtener el post con el featured_media
         wp_url = f"{wp_base}/wp-json/wp/v2/posts/{wp_post_id}?_fields=featured_media"
         r = requests.get(wp_url, auth=auth, timeout=10)
         if r.status_code != 200:
@@ -67,8 +63,6 @@ def _get_wordpress_image_url(wp_base: str, auth: tuple, wp_post_id: int) -> str 
         media_id = r.json().get("featured_media", 0)
         if not media_id:
             return None
-
-        # Obtener la URL de la imagen del media
         media_url = f"{wp_base}/wp-json/wp/v2/media/{media_id}?_fields=source_url"
         r2 = requests.get(media_url, auth=auth, timeout=10)
         if r2.status_code != 200:
@@ -83,11 +77,6 @@ def _get_wordpress_image_url(wp_base: str, auth: tuple, wp_post_id: int) -> str 
 
 
 def _job_social_sync():
-    """
-    Consulta WordPress para detectar artículos aprobados
-    y los publica en Facebook + Telegram de forma independiente.
-    Si el artículo no tiene image_url en la BD, la obtiene de WordPress.
-    """
     logger.info("=" * 60)
     logger.info("JOB: Sincronización WordPress → Facebook + Telegram")
     logger.info("=" * 60)
@@ -111,7 +100,7 @@ def _job_social_sync():
         with get_db() as db:
             pending = db.query(GeneratedArticle).filter(
                 GeneratedArticle.status == "draft",
-                GeneratedArticle.wordpress_post_id != None,   # noqa: E711
+                GeneratedArticle.wordpress_post_id != None,   # noqa
             ).all()
 
             pending = [
@@ -130,10 +119,8 @@ def _job_social_sync():
                 try:
                     wp_url = f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}"
                     response = requests.get(wp_url, auth=auth, timeout=10)
-
                     if response.status_code != 200:
                         continue
-
                     wp_post = response.json()
                     if wp_post.get("status", "") != "publish":
                         continue
@@ -141,7 +128,6 @@ def _job_social_sync():
                     logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
                     record.status = "published"
 
-                    # Obtener image_url — primero desde la BD, si no desde WordPress
                     image_url = None
                     if record.source_article_id:
                         source = db.query(Article).filter(
@@ -152,13 +138,10 @@ def _job_social_sync():
 
                     if not image_url:
                         logger.info(f"  🖼 Sin imagen en BD — buscando en WordPress...")
-                        image_url = _get_wordpress_image_url(
-                            wp_base, auth, record.wordpress_post_id
-                        )
+                        image_url = _get_wordpress_image_url(wp_base, auth, record.wordpress_post_id)
 
                     wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
 
-                    # ── FACEBOOK (independiente) ──
                     if page_token and page_id and record.facebook_post_id is None:
                         try:
                             fb_post_id = post_to_facebook_with_image(
@@ -177,7 +160,6 @@ def _job_social_sync():
                         except Exception as e:
                             logger.error(f"  📘 Facebook: excepción — {e}")
 
-                    # ── TELEGRAM (independiente) ──
                     if telegram_token and telegram_channel and record.telegram_message_id is None:
                         try:
                             tg_message_id = post_to_telegram(
@@ -205,6 +187,66 @@ def _job_social_sync():
         logger.error(f"ERROR EN SOCIAL SYNC: {e}", exc_info=True)
 
 
+def _job_newsletter():
+    """
+    Genera y envía el newsletter semanal cada domingo a las 8am RD (12 UTC).
+    Contenido: 5 mejores artículos + resumen editorial Claude + reporte PDF.
+    """
+    logger.info("=" * 60)
+    logger.info("JOB: Newsletter Semanal")
+    logger.info("=" * 60)
+    try:
+        from neurodiario.config.settings import settings
+        from neurodiario.db.database import get_db
+        from neurodiario.publisher.newsletter_generator import (
+            get_top_articles_of_week,
+            generate_editorial_summary,
+            generate_weekly_pdf,
+            MESES_ES,
+        )
+        from neurodiario.publisher.newsletter_sender import send_weekly_newsletter
+        from datetime import datetime
+
+        wp_base = settings.WORDPRESS_URL.rstrip("/")
+        youtube_url = getattr(settings, "YOUTUBE_WEEKLY_URL", "")
+
+        with get_db() as db:
+            logger.info("  📧 Obteniendo mejores artículos de la semana...")
+            articles = get_top_articles_of_week(db, limit=5)
+
+            if not articles:
+                logger.warning("  📧 Sin artículos publicados esta semana — newsletter cancelado")
+                return
+
+            logger.info(f"  📧 {len(articles)} artículos seleccionados")
+
+            logger.info("  📧 Generando resumen editorial con Claude...")
+            editorial = generate_editorial_summary(articles, youtube_url=youtube_url)
+
+            now = datetime.now()
+            week_label = f"{now.day} de {MESES_ES[now.month]} de {now.year}"
+
+            logger.info("  📧 Generando reporte PDF...")
+            pdf_path = generate_weekly_pdf(articles, week_label=week_label)
+
+            logger.info("  📧 Enviando newsletter via Mailchimp...")
+            success = send_weekly_newsletter(
+                articles=articles,
+                editorial_summary=editorial,
+                pdf_path=pdf_path,
+                youtube_url=youtube_url,
+                wp_base=wp_base,
+            )
+
+            if success:
+                logger.info("  📧 ✓ Newsletter semanal enviado exitosamente")
+            else:
+                logger.error("  📧 ✗ Error enviando newsletter")
+
+    except Exception as e:
+        logger.error(f"ERROR EN NEWSLETTER: {e}", exc_info=True)
+
+
 def start_scheduler() -> BackgroundScheduler:
     logger.info("=" * 60)
     logger.info("NeuroDiario Scheduler — MODO PRODUCCIÓN")
@@ -212,6 +254,7 @@ def start_scheduler() -> BackgroundScheduler:
     logger.info("  NLP:            cada 6 minutos")
     logger.info("  Publicación:    cada 8 minutos (10 artículos)")
     logger.info("  Social sync:    cada 5 minutos (Facebook + Telegram)")
+    logger.info("  Newsletter:     domingos 8am RD")
     logger.info("=" * 60)
 
     scheduler = BackgroundScheduler()
@@ -249,6 +292,17 @@ def start_scheduler() -> BackgroundScheduler:
         minutes=5,
         id="social_sync",
         name="Sincronización WordPress→Facebook+Telegram",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        _job_newsletter,
+        trigger="cron",
+        day_of_week="sun",
+        hour=12,    # 12 UTC = 8am RD (UTC-4)
+        minute=0,
+        id="newsletter_semanal",
+        name="Newsletter Semanal",
         replace_existing=True,
     )
 
