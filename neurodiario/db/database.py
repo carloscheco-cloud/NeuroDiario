@@ -5,7 +5,7 @@ Configura SQLAlchemy con PostgreSQL y provee sesiones de BD.
 
 import logging
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -81,13 +81,53 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def _resolve_source_id(db: Session, article_data: dict) -> Optional[int]:
+    """
+    Resuelve el source_id a partir de los datos del artículo.
+
+    - Si el dict ya trae source_id explícito, lo usa.
+    - Si trae source_name, busca el Source por nombre; si no existe, lo crea.
+    - Si no hay forma de resolverlo, devuelve None.
+
+    Esta es la lógica que faltaba: el pipeline de ingesta entrega
+    'source_name' (texto), pero antes se buscaba 'source_id' (que nunca venía),
+    dejando todos los artículos sin fuente.
+    """
+    from .models import Source
+
+    # 1) Si ya viene un source_id explícito, usarlo
+    explicit_id = article_data.get("source_id")
+    if explicit_id:
+        return explicit_id
+
+    # 2) Resolver por nombre de fuente
+    source_name = (article_data.get("source_name") or "").strip()
+    if not source_name:
+        return None
+
+    source_row = db.query(Source).filter(Source.name == source_name).first()
+    if not source_row:
+        source_row = Source(
+            name=source_name,
+            url=article_data.get("source_url", "") or source_name,
+            category=article_data.get("category", "general"),
+            language=article_data.get("language", "es"),
+        )
+        db.add(source_row)
+        db.flush()  # obtener el id sin cerrar la transacción
+        logger.info(f"  Nueva fuente registrada: {source_name} (id={source_row.id})")
+
+    return source_row.id
+
+
 def save_article(article_data: dict) -> bool:
     """
     Guarda un artículo en la BD dentro de una sesión propia.
 
     Args:
-        article_data: Dict con claves title, content/raw_content, source_id,
-                      url, published_at, word_count, summary.
+        article_data: Dict con claves title, content/raw_content, url,
+                      published_at, word_count, summary, y
+                      source_name/source_url (o source_id explícito).
 
     Returns:
         True si se insertó correctamente, False en caso de error o duplicado.
@@ -100,6 +140,9 @@ def save_article(article_data: dict) -> bool:
                 logger.debug(f"Artículo ya existe: {article_data['url']}")
                 return False
 
+            # Resolver la fuente (crea el Source si hace falta)
+            source_id = _resolve_source_id(db, article_data)
+
             article = Article(
                 title=article_data.get("title", "Sin título"),
                 url=article_data["url"],
@@ -108,10 +151,11 @@ def save_article(article_data: dict) -> bool:
                 raw_content=article_data.get("raw_content", article_data.get("content", "")),
                 word_count=article_data.get("word_count", 0),
                 published_at=article_data.get("published_at"),
-                source_id=article_data.get("source_id"),
+                source_id=source_id,
+                image_url=article_data.get("image_url") or None,
             )
             db.add(article)
-        logger.info(f"Artículo guardado: {article_data['url']}")
+        logger.info(f"Artículo guardado (source_id={source_id}): {article_data['url']}")
         return True
     except Exception as e:
         logger.error(f"Error guardando artículo: {e}")
