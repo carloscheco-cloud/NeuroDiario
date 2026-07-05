@@ -106,12 +106,22 @@ class SerperImageClient:
         """
         Busca una imagen en Google Images via Serper.
         Si site_filter se provee, se agrega como prefijo al query (ej. "site:diariolibre.com OR site:elnacional.com.do").
+        Retorna la PRIMERA imagen valida (comportamiento original, se mantiene por compatibilidad).
+        """
+        results = self.search_images(query, site_filter=site_filter, limit=1)
+        return results[0] if results else None
+
+    def search_images(self, query: str, site_filter: Optional[str] = None, limit: int = 5) -> List[Dict]:
+        """
+        Igual que search_image pero devuelve VARIAS imagenes validas (hasta `limit`).
+        Esto permite tener URLs de respaldo si la primera falla al descargarse.
         """
         if not self.api_key:
             logger.warning("SERPER_API_KEY no configurada.")
-            return None
+            return []
 
         full_query = f"({site_filter}) {query}" if site_filter else query
+        found: List[Dict] = []
 
         try:
             headers = {
@@ -120,7 +130,7 @@ class SerperImageClient:
             }
             payload = {
                 "q": full_query,
-                "num": 5,
+                "num": 10,
                 "gl": "do",
                 "hl": "es",
             }
@@ -134,10 +144,10 @@ class SerperImageClient:
             data = response.json()
 
             images = data.get("images", [])
-            for img in images[:5]:
+            for img in images:
                 image_url = img.get("imageUrl", "")
                 if image_url and image_url.startswith("http") and not self._is_blocked(image_url):
-                    return {
+                    found.append({
                         "url": image_url,
                         "url_medium": image_url,
                         "source": img.get("source", "Google Images"),
@@ -145,11 +155,13 @@ class SerperImageClient:
                         "alt": query,
                         "provider": "serper",
                         "title": img.get("title", ""),
-                    }
+                    })
+                if len(found) >= limit:
+                    break
         except Exception as e:
             logger.error(f"Error buscando imagen en Serper (query='{full_query[:60]}'): {e}")
 
-        return None
+        return found
 
     def build_image_html(self, image: Dict, caption: str = "") -> str:
         cap_text = caption or image.get("title") or image.get("alt", "")
@@ -182,17 +194,22 @@ class PexelsClient:
         self.api_key = api_key or os.getenv("PEXELS_API_KEY", "")
 
     def search_image(self, query: str, orientation: str = "landscape") -> Optional[Dict]:
+        results = self.search_images(query, orientation=orientation, limit=1)
+        return results[0] if results else None
+
+    def search_images(self, query: str, orientation: str = "landscape", limit: int = 3) -> List[Dict]:
+        """Devuelve varias fotos de Pexels (hasta `limit`)."""
         if not self.api_key:
-            return None
+            return []
+        found: List[Dict] = []
         try:
             headers = {"Authorization": self.api_key}
-            params = {"query": query, "per_page": 5, "orientation": orientation}
+            params = {"query": query, "per_page": max(limit, 5), "orientation": orientation}
             response = requests.get(self.BASE_URL, headers=headers, params=params, timeout=10)
             response.raise_for_status()
             photos = response.json().get("photos", [])
-            if photos:
-                photo = photos[0]
-                return {
+            for photo in photos[:limit]:
+                found.append({
                     "url": photo["src"]["large2x"],
                     "url_medium": photo["src"]["medium"],
                     "photographer": photo.get("photographer", "Pexels"),
@@ -200,10 +217,10 @@ class PexelsClient:
                     "alt": query,
                     "pexels_url": photo.get("url", "https://www.pexels.com"),
                     "provider": "pexels",
-                }
+                })
         except Exception as e:
             logger.error(f"Error buscando imagen en Pexels: {e}")
-        return None
+        return found
 
     def build_image_html(self, image: Dict, caption: str = "") -> str:
         cap_text = caption or image.get("alt", "")
@@ -242,40 +259,67 @@ class ArticleGenerator:
         self.serper = SerperImageClient(api_key=serper_api_key)
         self.pexels = PexelsClient(api_key=pexels_api_key)
 
-    def _get_image_with_url(self, query: str, caption: str) -> Tuple[Optional[str], str]:
+    def _collect_image_candidates(self, query: str, caption: str) -> Tuple[List[str], str]:
         """
-        Estrategia de 3 niveles:
+        Estrategia de 3 niveles, ahora recolectando VARIAS URLs candidatas:
         1. Serper con filtro de sitios dominicanos (prioritario)
         2. Serper búsqueda general en Google Images
-        3. Pexels (fallback final)
-        Retorna (url, html).
+        3. Pexels (fallback final — CDN abierto, casi nunca falla la descarga)
+
+        Retorna (lista_de_urls, html_de_la_primera).
+        La lista mantiene el orden de prioridad. Facebook intentará
+        descargar cada una hasta que alguna funcione.
         """
-        # NIVEL 1 — Sitios dominicanos
-        logger.info(f"  Buscando imagen en sitios dominicanos: '{query[:50]}'...")
-        image = self.serper.search_image(query, site_filter=DOMINICAN_SITES_QUERY)
-        if image:
-            url = image.get("url", "")
-            logger.info(f"  ✓ Imagen dominicana encontrada: {url[:60]}...")
-            return url, self.serper.build_image_html(image, caption=caption)
+        candidates: List[str] = []
+        first_html = ""
 
-        # NIVEL 2 — Serper general
-        logger.info(f"  Sin resultados dominicanos, buscando en Google general...")
-        image = self.serper.search_image(query)
-        if image:
-            url = image.get("url", "")
-            logger.info(f"  ✓ Imagen general encontrada: {url[:60]}...")
-            return url, self.serper.build_image_html(image, caption=caption)
+        def _add(url: str):
+            if url and url not in candidates:
+                candidates.append(url)
 
-        # NIVEL 3 — Pexels
-        logger.info(f"  Serper sin resultados, intentando Pexels...")
-        image = self.pexels.search_image(query)
-        if image:
-            url = image.get("url_medium", "")
-            logger.info(f"  ✓ Imagen de Pexels: {url[:60]}...")
-            return url, self.pexels.build_image_html(image, caption=caption)
+        # NIVEL 1 — Sitios dominicanos (varias candidatas)
+        logger.info(f"  Buscando imagenes en sitios dominicanos: '{query[:50]}'...")
+        dom_images = self.serper.search_images(query, site_filter=DOMINICAN_SITES_QUERY, limit=5)
+        for img in dom_images:
+            _add(img.get("url", ""))
+            if not first_html:
+                first_html = self.serper.build_image_html(img, caption=caption)
+        if dom_images:
+            logger.info(f"  ✓ {len(dom_images)} imagen(es) dominicana(s) encontrada(s)")
 
-        logger.warning("  No se encontro imagen en ninguna fuente.")
-        return None, ""
+        # NIVEL 2 — Serper general (varias candidatas)
+        logger.info(f"  Buscando en Google general...")
+        gen_images = self.serper.search_images(query, limit=5)
+        for img in gen_images:
+            _add(img.get("url", ""))
+            if not first_html:
+                first_html = self.serper.build_image_html(img, caption=caption)
+        if gen_images:
+            logger.info(f"  ✓ {len(gen_images)} imagen(es) general(es) encontrada(s)")
+
+        # NIVEL 3 — Pexels (red de seguridad: CDN abierto)
+        logger.info(f"  Agregando respaldo de Pexels...")
+        pex_images = self.pexels.search_images(query, limit=3)
+        for img in pex_images:
+            _add(img.get("url_medium", ""))
+            if not first_html:
+                first_html = self.pexels.build_image_html(img, caption=caption)
+        if pex_images:
+            logger.info(f"  ✓ {len(pex_images)} imagen(es) de Pexels agregada(s) como respaldo")
+
+        logger.info(f"  Total de URLs candidatas: {len(candidates)}")
+        return candidates, first_html
+
+    def _get_image_with_url(self, query: str, caption: str) -> Tuple[Optional[str], str]:
+        """
+        Compatibilidad: devuelve (primera_url, html) como antes.
+        Internamente ahora usa la recoleccion de candidatas.
+        """
+        candidates, html_out = self._collect_image_candidates(query, caption)
+        first_url = candidates[0] if candidates else None
+        if not first_url:
+            logger.warning("  No se encontro imagen en ninguna fuente.")
+        return first_url, html_out
 
     def _get_image(self, query: str, caption: str) -> str:
         """Retorna solo el HTML de la imagen."""
@@ -319,7 +363,8 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._remove_h1_from_html(article_html)
 
             image_query = self._build_image_query(title, category)
-            image_url, image_html = self._get_image_with_url(image_query, caption=title)
+            image_candidates, image_html = self._collect_image_candidates(image_query, caption=title)
+            image_url = image_candidates[0] if image_candidates else None
 
             footer_html = self._build_footer(source_display, fecha_str, url)
             share_url = wordpress_url if wordpress_url else url
@@ -337,6 +382,7 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
                 "category": category,
                 "tags": tags,
                 "image_url": image_url,
+                "image_candidates": image_candidates,
                 "source_citation": {
                     "source": source_display,
                     "url": url,
@@ -373,7 +419,8 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._remove_h1_from_html(article_html)
 
             image_query = self._build_image_query(topic, category)
-            image_html = self._get_image(image_query, caption=topic)
+            image_candidates, image_html = self._collect_image_candidates(image_query, caption=topic)
+            image_url = image_candidates[0] if image_candidates else None
 
             fecha_str = fecha_en_espanol(datetime.now())
             footer_html = self._build_footer(sources_citation, fecha_str, "")
@@ -386,6 +433,8 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
                 "excerpt": self._extract_excerpt(article_html),
                 "category": category,
                 "tags": [category, "Republica Dominicana", "NeuroDiario"],
+                "image_url": image_url,
+                "image_candidates": image_candidates,
                 "sources": [a.get("url", "") for a in articles if a.get("url")],
             }
         except Exception as e:
