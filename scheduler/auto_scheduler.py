@@ -128,33 +128,54 @@ def _job_social_sync():
                     logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
                     record.status = "published"
 
-                    image_url = None
+                    # ── Recolectar TODAS las URLs de imagen disponibles como candidatas ──
+                    # Se pasan como lista a Facebook: si la primera falla al descargar,
+                    # el generador intenta la siguiente automáticamente.
+                    image_candidates = []
+
+                    # 1) Imagen guardada en la BD del artículo fuente
+                    db_image_url = None
                     if record.source_article_id:
                         source = db.query(Article).filter(
                             Article.id == record.source_article_id
                         ).first()
-                        if source:
-                            image_url = source.image_url
+                        if source and source.image_url:
+                            db_image_url = source.image_url
+                            image_candidates.append(db_image_url)
 
-                    if not image_url:
-                        logger.info(f"  🖼 Sin imagen en BD — buscando en WordPress...")
-                        image_url = _get_wordpress_image_url(wp_base, auth, record.wordpress_post_id)
+                    # 2) Imagen destacada de WordPress (como respaldo adicional)
+                    wp_image_url = _get_wordpress_image_url(wp_base, auth, record.wordpress_post_id)
+                    if wp_image_url and wp_image_url not in image_candidates:
+                        image_candidates.append(wp_image_url)
+
+                    if not image_candidates:
+                        logger.info("  🖼 Sin imagen en BD ni WordPress — se usará fallback con marca")
+
+                    # Para Telegram mantenemos una sola URL (la mejor disponible)
+                    image_url = image_candidates[0] if image_candidates else None
 
                     wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
 
                     if page_token and page_id and record.facebook_post_id is None:
                         try:
-                            fb_post_id = post_to_facebook_with_image(
+                            # post_to_facebook_with_image ahora devuelve (post_id, url_que_funciono)
+                            fb_post_id, fb_working_url = post_to_facebook_with_image(
                                 title=record.title,
                                 wordpress_url=wordpress_url,
                                 page_id=page_id,
                                 page_token=page_token,
-                                image_url=image_url,
+                                image_url=image_candidates,   # lista de candidatas
                             )
                             if fb_post_id:
                                 record.facebook_post_id = fb_post_id
                                 record.facebook_posted_at = datetime.utcnow()
                                 logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
+                                # Si Facebook usó una URL distinta a la que teníamos en BD,
+                                # actualizamos la BD para que Telegram/otros usen la que sí sirve.
+                                if fb_working_url and fb_working_url != db_image_url:
+                                    if record.source_article_id and source and source.image_url != fb_working_url:
+                                        source.image_url = fb_working_url
+                                        logger.info(f"  🖼 BD actualizada con imagen que funcionó: {fb_working_url[:60]}...")
                             else:
                                 logger.error(f"  📘 Facebook: falló WP post {record.wordpress_post_id}")
                         except Exception as e:
