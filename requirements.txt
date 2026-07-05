@@ -29,3 +29,4 @@ python-wordpress-xmlrpc==2.3
 # Utilities
 python-dotenv==1.0.0
 tqdm==4.66.1
+reportlab
