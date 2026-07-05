@@ -52,11 +52,41 @@ def _job_publishing():
         logger.error(f"ERROR EN PUBLICACIÓN: {e}", exc_info=True)
 
 
+def _get_wordpress_image_url(wp_base: str, auth: tuple, wp_post_id: int) -> str | None:
+    """
+    Obtiene la URL de la imagen destacada de un post de WordPress.
+    Retorna la URL de la imagen o None si no tiene.
+    """
+    import requests
+    try:
+        # Obtener el post con el featured_media
+        wp_url = f"{wp_base}/wp-json/wp/v2/posts/{wp_post_id}?_fields=featured_media"
+        r = requests.get(wp_url, auth=auth, timeout=10)
+        if r.status_code != 200:
+            return None
+        media_id = r.json().get("featured_media", 0)
+        if not media_id:
+            return None
+
+        # Obtener la URL de la imagen del media
+        media_url = f"{wp_base}/wp-json/wp/v2/media/{media_id}?_fields=source_url"
+        r2 = requests.get(media_url, auth=auth, timeout=10)
+        if r2.status_code != 200:
+            return None
+        image_url = r2.json().get("source_url")
+        if image_url:
+            logger.info(f"  🖼 Imagen obtenida de WordPress: {image_url[:60]}...")
+        return image_url
+    except Exception as e:
+        logger.warning(f"  🖼 No se pudo obtener imagen de WordPress: {e}")
+        return None
+
+
 def _job_social_sync():
     """
     Consulta WordPress para detectar artículos aprobados
     y los publica en Facebook + Telegram de forma independiente.
-    Cada canal falla o tiene éxito por separado.
+    Si el artículo no tiene image_url en la BD, la obtiene de WordPress.
     """
     logger.info("=" * 60)
     logger.info("JOB: Sincronización WordPress → Facebook + Telegram")
@@ -111,6 +141,7 @@ def _job_social_sync():
                     logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
                     record.status = "published"
 
+                    # Obtener image_url — primero desde la BD, si no desde WordPress
                     image_url = None
                     if record.source_article_id:
                         source = db.query(Article).filter(
@@ -118,6 +149,12 @@ def _job_social_sync():
                         ).first()
                         if source:
                             image_url = source.image_url
+
+                    if not image_url:
+                        logger.info(f"  🖼 Sin imagen en BD — buscando en WordPress...")
+                        image_url = _get_wordpress_image_url(
+                            wp_base, auth, record.wordpress_post_id
+                        )
 
                     wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
 
