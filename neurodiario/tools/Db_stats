@@ -1,0 +1,123 @@
+"""
+NeuroDiario - Diagnóstico rápido de la base de datos (SOLO LECTURA)
+
+Muestra un resumen del estado actual:
+- Cuántos artículos crudos (Article) hay y cuántos procesados
+- Cuántos artículos generados (GeneratedArticle) y en qué estado
+- Distribución por categoría
+- Distribución por fuente (periódico)
+- Ritmo de ingesta (artículos por día en los últimos 7 días)
+
+NO modifica nada. Solo consulta y reporta.
+
+Uso local:   python -m neurodiario.tools.db_stats
+Uso Railway: railway run python -m neurodiario.tools.db_stats
+"""
+
+import logging
+from collections import Counter
+from datetime import datetime, timedelta
+
+logging.basicConfig(level=logging.WARNING)  # silenciar ruido, solo queremos el reporte
+
+
+def _bar(count: int, total: int, width: int = 30) -> str:
+    """Dibuja una barra de texto proporcional."""
+    if total == 0:
+        return ""
+    filled = int(width * count / total)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _pct(count: int, total: int) -> str:
+    if total == 0:
+        return "0.0%"
+    return f"{100 * count / total:.1f}%"
+
+
+def run_stats():
+    from neurodiario.db.database import get_db
+    from neurodiario.db.models import Article, GeneratedArticle, Source
+
+    print("\n" + "=" * 64)
+    print("  NEURODIARIO — DIAGNÓSTICO DE BASE DE DATOS")
+    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 64)
+
+    with get_db() as db:
+        # ── 1. ARTÍCULOS CRUDOS (Article) ──
+        total_articles = db.query(Article).count()
+        processed = db.query(Article).filter(Article.processed == True).count()   # noqa: E712
+        unprocessed = total_articles - processed
+        with_category = db.query(Article).filter(Article.category != None).count()  # noqa: E711
+        with_image = db.query(Article).filter(Article.image_url != None).count()    # noqa: E711
+
+        print("\n┌─ ARTÍCULOS CRUDOS (del RSS) ─────────────────────────────")
+        print(f"│  Total en la base de datos:  {total_articles}")
+        print(f"│  Procesados (NLP):           {processed}  ({_pct(processed, total_articles)})")
+        print(f"│  Sin procesar:               {unprocessed}")
+        print(f"│  Con categoría asignada:     {with_category}")
+        print(f"│  Con imagen:                 {with_image}  ({_pct(with_image, total_articles)})")
+        print("└──────────────────────────────────────────────────────────")
+
+        # ── 2. ARTÍCULOS GENERADOS (GeneratedArticle) ──
+        total_gen = db.query(GeneratedArticle).count()
+        print("\n┌─ ARTÍCULOS GENERADOS (por Claude) ───────────────────────")
+        print(f"│  Total generados:            {total_gen}")
+
+        # Desglose por estado
+        statuses = db.query(GeneratedArticle.status).all()
+        status_counter = Counter(s[0] for s in statuses)
+        for status, count in status_counter.most_common():
+            print(f"│    {status:<14} {count:>5}  ({_pct(count, total_gen)})")
+
+        # Publicados en cada canal
+        fb = db.query(GeneratedArticle).filter(GeneratedArticle.facebook_post_id != None).count()  # noqa: E711
+        tg = db.query(GeneratedArticle).filter(GeneratedArticle.telegram_message_id != None).count()  # noqa: E711
+        print(f"│  Publicados en Facebook:     {fb}")
+        print(f"│  Publicados en Telegram:     {tg}")
+        print("└──────────────────────────────────────────────────────────")
+
+        # ── 3. DISTRIBUCIÓN POR CATEGORÍA ──
+        cats = db.query(Article.category).filter(Article.category != None).all()  # noqa: E711
+        cat_counter = Counter(c[0] for c in cats)
+        total_cat = sum(cat_counter.values())
+
+        print("\n┌─ DISTRIBUCIÓN POR CATEGORÍA (artículos crudos) ──────────")
+        for cat, count in cat_counter.most_common():
+            print(f"│  {cat:<14} {_bar(count, total_cat)} {count:>4} ({_pct(count, total_cat)})")
+        print("└──────────────────────────────────────────────────────────")
+
+        # ── 4. DISTRIBUCIÓN POR FUENTE (periódico) ──
+        # Contamos artículos por source_id y resolvemos el nombre
+        sources = {s.id: s.name for s in db.query(Source).all()}
+        src_rows = db.query(Article.source_id).all()
+        src_counter = Counter(sources.get(r[0], "(sin fuente)") for r in src_rows)
+        total_src = sum(src_counter.values())
+
+        print("\n┌─ DISTRIBUCIÓN POR FUENTE (periódico) ────────────────────")
+        for name, count in src_counter.most_common():
+            print(f"│  {name:<22} {_bar(count, total_src, 20)} {count:>4} ({_pct(count, total_src)})")
+        print("└──────────────────────────────────────────────────────────")
+
+        # ── 5. RITMO DE INGESTA (últimos 7 días) ──
+        print("\n┌─ RITMO DE INGESTA (últimos 7 días) ──────────────────────")
+        now = datetime.utcnow()
+        for days_ago in range(6, -1, -1):
+            day_start = (now - timedelta(days=days_ago)).replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            day_count = db.query(Article).filter(
+                Article.fetched_at >= day_start,
+                Article.fetched_at < day_end,
+            ).count()
+            label = day_start.strftime("%a %d/%m")
+            print(f"│  {label}  {_bar(day_count, 100, 25)} {day_count}")
+        print("└──────────────────────────────────────────────────────────")
+
+    print("\n" + "=" * 64)
+    print("  Fin del diagnóstico. (No se modificó ningún dato.)")
+    print("=" * 64 + "\n")
+
+
+if __name__ == "__main__":
+    run_stats()
