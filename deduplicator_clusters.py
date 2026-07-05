@@ -34,9 +34,15 @@ logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 # ── Parámetros ajustables ──
 # Umbral de similaridad de coseno para considerar dos noticias "la misma".
 # Más alto = agrupa solo casi-idénticos. Más bajo = agrupa más agresivo.
-# Para español con stopwords, 0.15-0.22 funciona bien. Ajustar tras probar
-# con datos reales: si agrupa cosas distintas, súbelo; si separa duplicados, bájalo.
-SIMILARITY_THRESHOLD = 0.18
+# Con datos reales (151 artículos), 0.18 formaba clusters gigantes por
+# representantes "pegajosos". 0.30-0.35 rompe eso manteniendo duplicados reales.
+# Ajustar tras probar: si agrupa cosas distintas, súbelo; si separa duplicados, bájalo.
+SIMILARITY_THRESHOLD = 0.32
+
+# Tope de seguridad: ningún cluster real de noticias debería tener más de esto.
+# Si un cluster supera este tamaño, es señal de representante pegajoso y se
+# desarma (cada artículo queda solo). Evita el cluster-basura de 85 artículos.
+MAX_CLUSTER_SIZE = 8
 
 # Stopwords en español para que el TF-IDF ignore palabras vacías comunes
 # (sin esto, "de/la/el" inflan la similaridad con ruido).
@@ -147,21 +153,47 @@ def _agrupar(articulos, umbral):
     for i in range(n):
         if visitado[i]:
             continue
-        # Nuevo cluster con i y todos los que se le parecen
+        # Nuevo cluster: i es el REPRESENTANTE.
+        # Los demás entran solo si se parecen AL REPRESENTANTE (i),
+        # no a cualquier miembro. Esto evita las cadenas gigantes
+        # (A~B, B~C, C~D... arrastrando artículos inconexos).
         grupo = [i]
         visitado[i] = True
         for j in range(i + 1, n):
             if not visitado[j] and sim[i][j] >= umbral:
                 grupo.append(j)
                 visitado[j] = True
-        clusters.append([articulos[k] for k in grupo])
+
+        # Tope de seguridad: si el cluster creció demasiado, el representante
+        # es "pegajoso" (título genérico que se parece a todo). En ese caso
+        # desarmamos el grupo — cada artículo queda como su propio cluster.
+        if len(grupo) > MAX_CLUSTER_SIZE:
+            for k in grupo:
+                clusters.append([articulos[k]])
+        else:
+            clusters.append([articulos[k] for k in grupo])
 
     return clusters
 
 
+def _medio_base(source_name: str) -> str:
+    """
+    Reduce el nombre de fuente a su medio base.
+    'Diario Libre - Politica', 'Diario Libre - Deportes' -> 'Diario Libre'.
+    Así las secciones del mismo periódico cuentan como UN solo medio.
+    """
+    if not source_name:
+        return "(sin fuente)"
+    # Cortar en el primer " - " (separador de sección)
+    return source_name.split(" - ")[0].strip()
+
+
 def _fuentes_distintas(cluster):
-    """Cuenta cuántas fuentes DISTINTAS cubren un cluster."""
-    return len(set(a["source_id"] for a in cluster if a["source_id"]))
+    """
+    Cuenta cuántos MEDIOS distintos cubren un cluster.
+    Las secciones del mismo periódico (Diario Libre - X) cuentan como uno.
+    """
+    return len(set(_medio_base(a["source_name"]) for a in cluster if a["source_id"]))
 
 
 def analizar(horas: int, top: int, umbral: float):
@@ -200,7 +232,7 @@ def analizar(horas: int, top: int, umbral: float):
         # El título representativo: el del primer artículo del cluster
         titulo = cluster[0]["title"][:60]
         cat = cluster[0]["category"]
-        nombres_fuentes = sorted(set(a["source_name"] for a in cluster))
+        nombres_fuentes = sorted(set(_medio_base(a["source_name"]) for a in cluster))
 
         marca = "🔥" if n_fuentes >= 2 else "  "
         print(f"\n  {marca} [{idx}] {titulo}")
