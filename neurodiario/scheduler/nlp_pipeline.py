@@ -5,9 +5,9 @@ Orquesta el procesamiento de lenguaje natural sobre artículos ya ingestados:
   1. Obtiene artículos no procesados desde la BD.
   2. Limpia y normaliza el texto con TextCleaner.
   3. Extrae entidades nombradas con EntityExtractor.
-  4. Clasifica el artículo por tema con ArticleClassifier.
+  4. Clasifica el artículo por tema con ArticleClassifier (híbrido: fuente + Haiku).
   5. Persiste los resultados en la BD y marca el artículo como procesado.
-  
+
 FASE 1: Los módulos de clustering y trend detection están DESHABILITADOS.
 Los artículos procesados quedan listos en la BD para publicación manual vía WordPress.
 
@@ -25,18 +25,10 @@ class NLPPipeline:
     """Orquesta el procesamiento NLP de artículos no procesados."""
 
     def __init__(self, batch_size: int = 50):
-        """
-        Args:
-            batch_size: Número de artículos a procesar por ejecución.
-        """
         self.batch_size = batch_size
         self._cleaner = None
         self._extractor = None
         self._classifier = None
-
-    # ------------------------------------------------------------------ #
-    #  Carga perezosa de componentes NLP (evita importar spaCy al inicio) #
-    # ------------------------------------------------------------------ #
 
     @property
     def cleaner(self):
@@ -57,19 +49,23 @@ class NLPPipeline:
     def classifier(self):
         if self._classifier is None:
             from neurodiario.nlp.classifier import ArticleClassifier
-            self._classifier = ArticleClassifier(method="keyword")
+            from neurodiario.config.settings import settings
+            # Híbrido: usa la categoría de la fuente cuando es confiable,
+            # y Claude Haiku cuando la fuente es genérica/dudosa.
+            self._classifier = ArticleClassifier(
+                method="hybrid",
+                api_key=getattr(settings, "CLAUDE_API_KEY", None),
+                model=getattr(settings, "CLAUDE_MODEL", None),
+            )
         return self._classifier
 
-    # ------------------------------------------------------------------ #
-    #  Procesamiento de un artículo individual                            #
-    # ------------------------------------------------------------------ #
-
-    def _process_article(self, article) -> dict:
+    def _process_article(self, article, source_category: str = None) -> dict:
         """
         Aplica el pipeline NLP completo a un artículo ORM.
 
         Args:
             article: Instancia de Article (SQLAlchemy ORM).
+            source_category: Categoría declarada por la fuente RSS (si se conoce).
 
         Returns:
             Diccionario con los campos NLP calculados.
@@ -87,10 +83,11 @@ class NLPPipeline:
         # 3) Extracción de entidades
         entities = self.extractor.extract_entities(clean_text)
 
-        # 4) Clasificación
+        # 4) Clasificación (pasando la categoría de la fuente para la ruta híbrida)
         category, confidence = self.classifier.classify_article(
             title=article.title or "",
             content=clean_text,
+            source_category=source_category,
         )
 
         return {
@@ -101,10 +98,6 @@ class NLPPipeline:
             "category_confidence": confidence,
         }
 
-    # ------------------------------------------------------------------ #
-    #  Punto de entrada principal                                          #
-    # ------------------------------------------------------------------ #
-
     def run_nlp_pipeline(self) -> int:
         """
         Ejecuta el pipeline NLP sobre todos los artículos pendientes.
@@ -113,7 +106,7 @@ class NLPPipeline:
             Número de artículos procesados exitosamente.
         """
         from neurodiario.db.database import get_db, get_unprocessed_articles
-        from neurodiario.db.models import Article
+        from neurodiario.db.models import Article, Source
 
         logger.info("=" * 60)
         logger.info("INICIANDO PIPELINE NLP - FASE 1 (SIN CLUSTERING)")
@@ -126,12 +119,17 @@ class NLPPipeline:
             logger.info("No hay artículos pendientes de procesamiento NLP.")
             return 0
 
+        # Mapa source_id -> categoría de la fuente, para la ruta híbrida
+        with get_db() as db:
+            fuentes_cat = {s.id: s.category for s in db.query(Source).all()}
+
         logger.info(f"Artículos a procesar: {len(articles)}")
         processed_count = 0
 
         for article in articles:
             try:
-                nlp_data = self._process_article(article)
+                source_category = fuentes_cat.get(article.source_id)
+                nlp_data = self._process_article(article, source_category=source_category)
 
                 with get_db() as db:
                     db_article = db.query(Article).filter(Article.id == article.id).first()
@@ -161,27 +159,14 @@ class NLPPipeline:
         logger.info(f"  Fallidos   : {len(articles) - processed_count}")
         logger.info("=" * 60)
 
-        # ------------------------------------------------------------------ #
-        #  FASE 1: Clustering y Trends DESHABILITADOS                         #
-        #  Los artículos están listos en la BD para publicación manual       #
-        # ------------------------------------------------------------------ #
         logger.info("\n🚫 Módulos de Clustering y Trends deshabilitados (Fase 1)")
         logger.info(f"✓ {processed_count} artículos procesados y listos para publicación")
-        logger.info("  Usa WordPress admin para revisar y publicar artículos")
 
         return processed_count
 
 
 def run_nlp_pipeline(batch_size: int = 50) -> int:
-    """
-    Función de conveniencia para ejecutar el pipeline NLP desde cualquier contexto.
-
-    Args:
-        batch_size: Número máximo de artículos a procesar.
-
-    Returns:
-        Número de artículos procesados.
-    """
+    """Función de conveniencia para ejecutar el pipeline NLP desde cualquier contexto."""
     pipeline = NLPPipeline(batch_size=batch_size)
     return pipeline.run_nlp_pipeline()
 
