@@ -1,12 +1,15 @@
 """
-NeuroDiario - Auto Scheduler
-Flujo de producción normal para ~100 artículos diarios.
-Intervalos:
-- Cada 3 min:  Ingesta RSS
-- Cada 6 min:  Procesamiento NLP
-- Cada 8 min:  Generación + Publicación (10 artículos por ciclo)
-- Cada 5 min:  Sincronización WordPress → Facebook + Telegram
-- Domingos 8am RD: Newsletter Semanal
+NeuroDiario - Auto Scheduler (con CLUSTERING como único camino de generación)
+
+Cambios vs versión anterior:
+- El job de publicación viejo (uno-por-artículo) se REEMPLAZA por el
+  pipeline de clustering (agrupa duplicados, genera UN artículo por noticia).
+- Intervalos ajustados al ritmo real de las fuentes para no apilar basura:
+    · Ingesta RSS:  cada 20 min (antes 3)
+    · NLP:          cada 20 min (antes 6)
+    · Clustering:   3 veces al día (7am, 1pm, 7pm RD) — no cada 8 min
+    · Social sync:  cada 10 min (Facebook + Telegram)
+    · Newsletter:   domingos 8am RD
 """
 import logging
 import time
@@ -41,16 +44,22 @@ def _job_nlp():
         logger.error(f"Error en pipeline NLP: {e}", exc_info=True)
 
 
-def _job_publishing():
+def _job_clustering():
+    """
+    Nuevo job de generación: agrupa noticias por similaridad y genera
+    UN artículo por cluster (los N mejores por prioridad). Reemplaza al
+    viejo _job_publishing que generaba uno-por-artículo y apilaba fallidos.
+    """
     logger.info("=" * 60)
-    logger.info("JOB: Generación y Publicación")
+    logger.info("JOB: Generación con CLUSTERING")
     logger.info("=" * 60)
     try:
-        from neurodiario.scheduler.publishing_pipeline import run_publishing_pipeline
-        published = run_publishing_pipeline(max_articles=10)
-        logger.info(f"Publicados en este ciclo: {published} artículos")
+        # clustering_pipeline.py vive en la raíz del proyecto
+        from clustering_pipeline import procesar
+        publicados = procesar(publicar=True)
+        logger.info(f"Clustering publicó {publicados} artículos en este ciclo")
     except Exception as e:
-        logger.error(f"ERROR EN PUBLICACIÓN: {e}", exc_info=True)
+        logger.error(f"ERROR EN CLUSTERING: {e}", exc_info=True)
 
 
 def _get_wordpress_image_url(wp_base: str, auth: tuple, wp_post_id: int):
@@ -128,12 +137,7 @@ def _job_social_sync():
                     logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
                     record.status = "published"
 
-                    # ── Recolectar TODAS las URLs de imagen disponibles como candidatas ──
-                    # Se pasan como lista a Facebook: si la primera falla al descargar,
-                    # el generador intenta la siguiente automáticamente.
                     image_candidates = []
-
-                    # 1) Imagen guardada en la BD del artículo fuente
                     db_image_url = None
                     if record.source_article_id:
                         source = db.query(Article).filter(
@@ -143,7 +147,6 @@ def _job_social_sync():
                             db_image_url = source.image_url
                             image_candidates.append(db_image_url)
 
-                    # 2) Imagen destacada de WordPress (como respaldo adicional)
                     wp_image_url = _get_wordpress_image_url(wp_base, auth, record.wordpress_post_id)
                     if wp_image_url and wp_image_url not in image_candidates:
                         image_candidates.append(wp_image_url)
@@ -151,31 +154,26 @@ def _job_social_sync():
                     if not image_candidates:
                         logger.info("  🖼 Sin imagen en BD ni WordPress — se usará fallback con marca")
 
-                    # Para Telegram mantenemos una sola URL (la mejor disponible)
                     image_url = image_candidates[0] if image_candidates else None
-
                     wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
 
                     if page_token and page_id and record.facebook_post_id is None:
                         try:
-                            # post_to_facebook_with_image ahora devuelve (post_id, url_que_funciono)
                             fb_post_id, fb_working_url = post_to_facebook_with_image(
                                 title=record.title,
                                 wordpress_url=wordpress_url,
                                 page_id=page_id,
                                 page_token=page_token,
-                                image_url=image_candidates,   # lista de candidatas
+                                image_url=image_candidates,
                             )
                             if fb_post_id:
                                 record.facebook_post_id = fb_post_id
                                 record.facebook_posted_at = datetime.utcnow()
                                 logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
-                                # Si Facebook usó una URL distinta a la que teníamos en BD,
-                                # actualizamos la BD para que Telegram/otros usen la que sí sirve.
                                 if fb_working_url and fb_working_url != db_image_url:
                                     if record.source_article_id and source and source.image_url != fb_working_url:
                                         source.image_url = fb_working_url
-                                        logger.info(f"  🖼 BD actualizada con imagen que funcionó: {fb_working_url[:60]}...")
+                                        logger.info(f"  🖼 BD actualizada con imagen que funcionó")
                             else:
                                 logger.error(f"  📘 Facebook: falló WP post {record.wordpress_post_id}")
                         except Exception as e:
@@ -209,10 +207,6 @@ def _job_social_sync():
 
 
 def _job_newsletter():
-    """
-    Genera y envía el newsletter semanal cada domingo a las 8am RD (12 UTC).
-    Contenido: 5 mejores artículos + resumen editorial Claude + reporte PDF.
-    """
     logger.info("=" * 60)
     logger.info("JOB: Newsletter Semanal")
     logger.info("=" * 60)
@@ -240,17 +234,12 @@ def _job_newsletter():
                 return
 
             logger.info(f"  📧 {len(articles)} artículos seleccionados")
-
-            logger.info("  📧 Generando resumen editorial con Claude...")
             editorial = generate_editorial_summary(articles, youtube_url=youtube_url)
 
             now = datetime.now()
             week_label = f"{now.day} de {MESES_ES[now.month]} de {now.year}"
-
-            logger.info("  📧 Generando reporte PDF...")
             pdf_path = generate_weekly_pdf(articles, week_label=week_label)
 
-            logger.info("  📧 Enviando newsletter via Mailchimp...")
             success = send_weekly_newsletter(
                 articles=articles,
                 editorial_summary=editorial,
@@ -270,20 +259,20 @@ def _job_newsletter():
 
 def start_scheduler() -> BackgroundScheduler:
     logger.info("=" * 60)
-    logger.info("NeuroDiario Scheduler — MODO PRODUCCIÓN")
-    logger.info("  Ingesta RSS:    cada 3 minutos")
-    logger.info("  NLP:            cada 6 minutos")
-    logger.info("  Publicación:    cada 8 minutos (10 artículos)")
-    logger.info("  Social sync:    cada 5 minutos (Facebook + Telegram)")
+    logger.info("NeuroDiario Scheduler — MODO PRODUCCIÓN (con Clustering)")
+    logger.info("  Ingesta RSS:    cada 20 minutos")
+    logger.info("  NLP:            cada 20 minutos")
+    logger.info("  Clustering:     7am, 1pm, 7pm (hora RD)")
+    logger.info("  Social sync:    cada 10 minutos")
     logger.info("  Newsletter:     domingos 8am RD")
     logger.info("=" * 60)
 
-    scheduler = BackgroundScheduler()
+    scheduler = BackgroundScheduler(timezone="America/Santo_Domingo")
 
     scheduler.add_job(
         _job_ingestion,
         trigger="interval",
-        minutes=3,
+        minutes=20,
         id="ingestion_rss",
         name="Ingesta RSS",
         replace_existing=True,
@@ -292,25 +281,27 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.add_job(
         _job_nlp,
         trigger="interval",
-        minutes=6,
+        minutes=20,
         id="nlp_pipeline",
         name="Pipeline NLP",
         replace_existing=True,
     )
 
+    # Clustering 3 veces al día (mañana, mediodía, noche hora RD)
     scheduler.add_job(
-        _job_publishing,
-        trigger="interval",
-        minutes=8,
-        id="publishing_pipeline",
-        name="Generación y Publicación",
+        _job_clustering,
+        trigger="cron",
+        hour="7,13,19",
+        minute=0,
+        id="clustering_generation",
+        name="Generación con Clustering",
         replace_existing=True,
     )
 
     scheduler.add_job(
         _job_social_sync,
         trigger="interval",
-        minutes=5,
+        minutes=10,
         id="social_sync",
         name="Sincronización WordPress→Facebook+Telegram",
         replace_existing=True,
@@ -320,7 +311,7 @@ def start_scheduler() -> BackgroundScheduler:
         _job_newsletter,
         trigger="cron",
         day_of_week="sun",
-        hour=12,    # 12 UTC = 8am RD (UTC-4)
+        hour=8,
         minute=0,
         id="newsletter_semanal",
         name="Newsletter Semanal",
