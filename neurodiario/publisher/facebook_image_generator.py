@@ -1,6 +1,12 @@
 """
 Generador de imágenes para posts de Facebook — NeuroDiario
 Estilo BBC: foto de fondo + overlay oscuro + título completo + barra de marca.
+
+Mejoras:
+- Intenta descargar VARIAS URLs candidatas hasta que una funcione
+  (antes se rendía con la primera y caía al fondo oscuro).
+- Fallback rediseñado: gradiente limpio con marca, se ve intencional.
+- Reporta al pipeline cuál URL funcionó, para que WordPress use la misma.
 """
 
 import html
@@ -9,7 +15,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple, Union
 
 import requests
 
@@ -71,27 +77,89 @@ def _clean_title(title: str) -> str:
     return html.unescape(title).strip()
 
 
-def _download_image(url: str):
-    """Descarga imagen usando requests con headers de browser."""
+def _download_one(url: str):
+    """
+    Intenta descargar UNA imagen. Retorna un objeto PIL.Image (RGB) o None.
+    Valida que el contenido sea realmente una imagen y no una página HTML de error.
+    """
     try:
         from PIL import Image
         r = requests.get(url, headers=BROWSER_HEADERS, timeout=15)
         r.raise_for_status()
+
+        # Verificar que sea imagen y no HTML (algunos sitios devuelven pagina de error 200)
+        content_type = r.headers.get("Content-Type", "").lower()
+        if "image" not in content_type and "octet-stream" not in content_type:
+            logger.warning(f"  🖼 URL no es imagen (Content-Type={content_type}): {url[:60]}")
+            return None
+
+        # Imagen demasiado pequeña = probablemente un icono o pixel de rastreo
+        if len(r.content) < 3000:
+            logger.warning(f"  🖼 Imagen demasiado pequeña ({len(r.content)} bytes): {url[:60]}")
+            return None
+
         img = Image.open(io.BytesIO(r.content)).convert("RGB")
-        logger.info(f"  🖼 Imagen descargada: {url[:70]}")
+
+        # Rechazar imagenes minusculas por dimension
+        if img.width < 300 or img.height < 200:
+            logger.warning(f"  🖼 Imagen muy pequeña ({img.width}x{img.height}): {url[:60]}")
+            return None
+
+        logger.info(f"  🖼 ✓ Imagen descargada OK: {url[:70]}")
         return img
     except Exception as e:
-        logger.warning(f"  🖼 No se pudo descargar imagen ({e}): {url[:70]}")
+        logger.warning(f"  🖼 ✗ Falló descarga ({type(e).__name__}): {url[:70]}")
         return None
 
 
-def _make_fallback():
+def _download_first_working(urls: List[str]) -> Tuple[Optional["object"], Optional[str]]:
+    """
+    Recorre la lista de URLs candidatas e intenta descargar cada una
+    hasta que alguna funcione.
+    Retorna (imagen_PIL, url_que_funciono) o (None, None) si todas fallan.
+    """
+    for i, url in enumerate(urls, 1):
+        if not url:
+            continue
+        logger.info(f"  🖼 Intentando candidata {i}/{len(urls)}...")
+        img = _download_one(url)
+        if img is not None:
+            return img, url
+    return None, None
+
+
+def _make_fallback(title: str = ""):
+    """
+    Fallback rediseñado: gradiente navy->azul limpio con textura sutil de puntos,
+    pensado para verse intencional (no roto). El título se dibuja encima después.
+    """
     from PIL import Image, ImageDraw
-    img = Image.new("RGB", (FB_W, FB_H), (20, 50, 100))
+
+    img = Image.new("RGB", (FB_W, FB_H), NAVY)
     draw = ImageDraw.Draw(img)
-    for x in range(0, FB_W, 60):
-        for y in range(0, FB_H, 60):
-            draw.ellipse([(x-2, y-2), (x+2, y+2)], fill=(30, 65, 120))
+
+    # Gradiente vertical navy -> azul mas claro
+    top = (11, 31, 59)
+    bottom = (18, 52, 104)
+    for y in range(FB_H):
+        t = y / FB_H
+        r = int(top[0] + (bottom[0] - top[0]) * t)
+        g = int(top[1] + (bottom[1] - top[1]) * t)
+        b = int(top[2] + (bottom[2] - top[2]) * t)
+        draw.line([(0, y), (FB_W, y)], fill=(r, g, b))
+
+    # Textura sutil de red neuronal (puntos + lineas tenues) en la esquina superior derecha
+    import random
+    random.seed(42)  # determinista: siempre igual
+    nodes = [(random.randint(FB_W // 2, FB_W - 40), random.randint(30, FB_H // 2)) for _ in range(14)]
+    for i, (x, y) in enumerate(nodes):
+        for (x2, y2) in nodes[i + 1:]:
+            dist = ((x - x2) ** 2 + (y - y2) ** 2) ** 0.5
+            if dist < 220:
+                draw.line([(x, y), (x2, y2)], fill=(30, 70, 130), width=1)
+    for (x, y) in nodes:
+        draw.ellipse([(x - 4, y - 4), (x + 4, y + 4)], fill=(0, 119, 255))
+
     return img
 
 
@@ -108,23 +176,58 @@ def _apply_overlay(img):
     return Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
 
 
-def generate_facebook_image(title: str, image_url: Optional[str] = None) -> Optional[str]:
-    """Genera imagen estilo BBC. Retorna ruta al PNG temporal o None."""
+def _normalize_urls(image_url: Union[str, List[str], None]) -> List[str]:
+    """
+    Acepta tanto una sola URL (str) como una lista de URLs.
+    Devuelve siempre una lista limpia, sin duplicados ni vacíos.
+    Esto permite que el resto del pipeline llame igual que antes.
+    """
+    if image_url is None:
+        return []
+    if isinstance(image_url, str):
+        return [image_url] if image_url else []
+    # es lista/tupla
+    seen = set()
+    out = []
+    for u in image_url:
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def generate_facebook_image(
+    title: str,
+    image_url: Union[str, List[str], None] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Genera imagen estilo BBC.
+    `image_url` puede ser una sola URL o una lista de candidatas.
+    Retorna (ruta_al_png_temporal, url_que_funciono).
+    Si ninguna URL funciona, usa el fallback y retorna (ruta, None).
+    Si falla la generación por completo, retorna (None, None).
+    """
     try:
         from PIL import Image, ImageDraw
 
         title = _clean_title(title)
+        candidates = _normalize_urls(image_url)
 
-        # 1. Fondo
-        foto = _download_image(image_url) if image_url else None
+        # 1. Fondo — intentar cada candidata hasta que una funcione
+        foto, url_ok = (None, None)
+        if candidates:
+            logger.info(f"  🖼 {len(candidates)} URL(s) candidata(s) para el fondo")
+            foto, url_ok = _download_first_working(candidates)
+
         if foto:
-            logger.info(f"  🖼 Usando imagen de fondo: {image_url[:60]}...")
+            logger.info(f"  🖼 Usando foto real de fondo: {url_ok[:60]}...")
+            bg = foto.resize((FB_W, FB_H), Image.LANCZOS)
         else:
-            logger.info("  🖼 Sin imagen de fondo — usando fallback oscuro")
-        bg = foto.resize((FB_W, FB_H), Image.LANCZOS) if foto else _make_fallback()
+            logger.info("  🖼 Ninguna foto funcionó — usando fallback con marca")
+            bg = _make_fallback(title)
 
-        # 2. Overlay oscuro
-        img = _apply_overlay(bg)
+        # 2. Overlay oscuro (solo si hay foto real; el fallback ya es oscuro)
+        img = _apply_overlay(bg) if foto else bg
         draw = ImageDraw.Draw(img)
 
         # 3. Barra navy inferior
@@ -182,11 +285,11 @@ def generate_facebook_image(title: str, image_url: Optional[str] = None) -> Opti
         img.save(tmp.name, format="PNG", optimize=True)
         tmp.close()
         logger.info(f"  🖼 Imagen generada: {tmp.name}")
-        return tmp.name
+        return tmp.name, url_ok
 
     except Exception as e:
         logger.error(f"  🖼 Error generando imagen: {e}", exc_info=True)
-        return None
+        return None, None
 
 
 def post_to_facebook_with_image(
@@ -194,16 +297,20 @@ def post_to_facebook_with_image(
     wordpress_url: str,
     page_id: str,
     page_token: str,
-    image_url: Optional[str] = None,
-) -> Optional[str]:
+    image_url: Union[str, List[str], None] = None,
+) -> Tuple[Optional[str], Optional[str]]:
     """
     Publica en Facebook usando /photos con caption — imagen grande en el feed.
-    Retorna el post_id o None.
+    `image_url` puede ser una sola URL o una lista de candidatas.
+
+    Retorna (post_id, url_de_imagen_que_funciono).
+    La segunda parte permite que el pipeline actualice WordPress con
+    la misma foto que sí funcionó en Facebook.
     """
     clean_title = _clean_title(title)
 
-    # 1. Generar imagen
-    image_path = generate_facebook_image(title=clean_title, image_url=image_url)
+    # 1. Generar imagen (intenta todas las candidatas internamente)
+    image_path, working_url = generate_facebook_image(title=clean_title, image_url=image_url)
 
     if not image_path:
         logger.warning("  📘 Sin imagen — publicando solo link")
@@ -217,10 +324,10 @@ def post_to_facebook_with_image(
                 },
                 timeout=15,
             )
-            return r.json().get("id")
+            return r.json().get("id"), None
         except Exception as e:
             logger.error(f"  📘 Error publicando fallback: {e}")
-            return None
+            return None, None
 
     # 2. Publicar con /photos
     try:
@@ -242,18 +349,18 @@ def post_to_facebook_with_image(
 
         if "post_id" in result:
             logger.info(f"  📘 Post publicado con imagen — post_id: {result['post_id']}")
-            return result["post_id"]
+            return result["post_id"], working_url
         elif "id" in result:
             logger.info(f"  📘 Foto publicada — id: {result['id']}")
-            return result["id"]
+            return result["id"], working_url
         else:
             error = result.get("error", {})
             logger.error(f"  📘 Error publicando foto: {error.get('message', result)}")
-            return None
+            return None, working_url
 
     except Exception as e:
         logger.error(f"  📘 Excepción publicando foto: {e}")
-        return None
+        return None, working_url
     finally:
         try:
             if image_path and os.path.exists(image_path):
