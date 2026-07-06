@@ -8,7 +8,7 @@ Cambios vs versión anterior:
     · Ingesta RSS:  cada 20 min (antes 3)
     · NLP:          cada 20 min (antes 6)
     · Clustering:   3 veces al día (7am, 1pm, 7pm RD) — no cada 8 min
-    · Social sync:  cada 10 min (Facebook + Telegram)
+    · Social sync:  cada 10 min (Facebook + Telegram) — UNO por ciclo (escalonado)
     · Newsletter:   domingos 8am RD
 """
 import logging
@@ -86,8 +86,15 @@ def _get_wordpress_image_url(wp_base: str, auth: tuple, wp_post_id: int):
 
 
 def _job_social_sync():
+    """
+    Distribuye artículos publicados en WordPress a Facebook y Telegram.
+
+    MODO ESCALONADO: procesa UN solo artículo por ciclo (cada 10 minutos).
+    Así, si publicas 20 artículos de golpe en WordPress, se distribuyen
+    a redes sociales de uno en uno cada ~10 minutos.
+    """
     logger.info("=" * 60)
-    logger.info("JOB: Sincronización WordPress → Facebook + Telegram")
+    logger.info("JOB: Sincronización WordPress → Facebook + Telegram (escalonado)")
     logger.info("=" * 60)
     try:
         from neurodiario.config.settings import settings
@@ -122,83 +129,87 @@ def _job_social_sync():
                 logger.info("  Social sync: sin artículos pendientes.")
                 return
 
-            logger.info(f"  Social sync: {len(pending)} artículo(s) para distribuir...")
+            logger.info(f"  Social sync: {len(pending)} artículo(s) en cola — procesando 1 ahora...")
 
-            for record in pending:
-                try:
-                    wp_url = f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}"
-                    response = requests.get(wp_url, auth=auth, timeout=10)
-                    if response.status_code != 200:
-                        continue
-                    wp_post = response.json()
-                    if wp_post.get("status", "") != "publish":
-                        continue
+            # ── CAMBIO CLAVE: solo procesamos el primero de la lista ──
+            record = pending[0]
 
-                    logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
-                    record.status = "published"
+            try:
+                wp_url = f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}"
+                response = requests.get(wp_url, auth=auth, timeout=10)
+                if response.status_code != 200:
+                    logger.warning(f"  No se pudo obtener WP post {record.wordpress_post_id}")
+                    return
+                wp_post = response.json()
+                if wp_post.get("status", "") != "publish":
+                    logger.info(f"  WP post {record.wordpress_post_id} aún no está publicado — esperando.")
+                    return
 
-                    image_candidates = []
-                    db_image_url = None
-                    if record.source_article_id:
-                        source = db.query(Article).filter(
-                            Article.id == record.source_article_id
-                        ).first()
-                        if source and source.image_url:
-                            db_image_url = source.image_url
-                            image_candidates.append(db_image_url)
+                logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
+                record.status = "published"
 
-                    wp_image_url = _get_wordpress_image_url(wp_base, auth, record.wordpress_post_id)
-                    if wp_image_url and wp_image_url not in image_candidates:
-                        image_candidates.append(wp_image_url)
+                image_candidates = []
+                db_image_url = None
+                if record.source_article_id:
+                    source = db.query(Article).filter(
+                        Article.id == record.source_article_id
+                    ).first()
+                    if source and source.image_url:
+                        db_image_url = source.image_url
+                        image_candidates.append(db_image_url)
 
-                    if not image_candidates:
-                        logger.info("  🖼 Sin imagen en BD ni WordPress — se usará fallback con marca")
+                wp_image_url = _get_wordpress_image_url(wp_base, auth, record.wordpress_post_id)
+                if wp_image_url and wp_image_url not in image_candidates:
+                    image_candidates.append(wp_image_url)
 
-                    image_url = image_candidates[0] if image_candidates else None
-                    wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
+                if not image_candidates:
+                    logger.info("  🖼 Sin imagen en BD ni WordPress — se usará fallback con marca")
 
-                    if page_token and page_id and record.facebook_post_id is None:
-                        try:
-                            fb_post_id, fb_working_url = post_to_facebook_with_image(
-                                title=record.title,
-                                wordpress_url=wordpress_url,
-                                page_id=page_id,
-                                page_token=page_token,
-                                image_url=image_candidates,
-                            )
-                            if fb_post_id:
-                                record.facebook_post_id = fb_post_id
-                                record.facebook_posted_at = datetime.utcnow()
-                                logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
-                                if fb_working_url and fb_working_url != db_image_url:
-                                    if record.source_article_id and source and source.image_url != fb_working_url:
-                                        source.image_url = fb_working_url
-                                        logger.info(f"  🖼 BD actualizada con imagen que funcionó")
-                            else:
-                                logger.error(f"  📘 Facebook: falló WP post {record.wordpress_post_id}")
-                        except Exception as e:
-                            logger.error(f"  📘 Facebook: excepción — {e}")
+                image_url = image_candidates[0] if image_candidates else None
+                wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
 
-                    if telegram_token and telegram_channel and record.telegram_message_id is None:
-                        try:
-                            tg_message_id = post_to_telegram(
-                                title=record.title,
-                                wordpress_url=wordpress_url,
-                                channel_id=telegram_channel,
-                                bot_token=telegram_token,
-                                image_url=image_url,
-                            )
-                            if tg_message_id:
-                                record.telegram_message_id = tg_message_id
-                                record.telegram_posted_at = datetime.utcnow()
-                                logger.info(f"  📱 Telegram: publicado — message_id {tg_message_id}")
-                            else:
-                                logger.error(f"  📱 Telegram: falló WP post {record.wordpress_post_id}")
-                        except Exception as e:
-                            logger.error(f"  📱 Telegram: excepción — {e}")
+                if page_token and page_id and record.facebook_post_id is None:
+                    try:
+                        fb_post_id, fb_working_url = post_to_facebook_with_image(
+                            title=record.title,
+                            wordpress_url=wordpress_url,
+                            page_id=page_id,
+                            page_token=page_token,
+                            image_url=image_candidates,
+                        )
+                        if fb_post_id:
+                            record.facebook_post_id = fb_post_id
+                            record.facebook_posted_at = datetime.utcnow()
+                            logger.info(f"  📘 Facebook: publicado — ID {fb_post_id}")
+                            if fb_working_url and fb_working_url != db_image_url:
+                                if record.source_article_id and source and source.image_url != fb_working_url:
+                                    source.image_url = fb_working_url
+                                    logger.info(f"  🖼 BD actualizada con imagen que funcionó")
+                        else:
+                            logger.error(f"  📘 Facebook: falló WP post {record.wordpress_post_id}")
+                    except Exception as e:
+                        logger.error(f"  📘 Facebook: excepción — {e}")
 
-                except Exception as e:
-                    logger.error(f"  Error procesando WP post {record.wordpress_post_id}: {e}")
+                if telegram_token and telegram_channel and record.telegram_message_id is None:
+                    try:
+                        tg_message_id = post_to_telegram(
+                            title=record.title,
+                            wordpress_url=wordpress_url,
+                            channel_id=telegram_channel,
+                            bot_token=telegram_token,
+                            image_url=image_url,
+                        )
+                        if tg_message_id:
+                            record.telegram_message_id = tg_message_id
+                            record.telegram_posted_at = datetime.utcnow()
+                            logger.info(f"  📱 Telegram: publicado — message_id {tg_message_id}")
+                        else:
+                            logger.error(f"  📱 Telegram: falló WP post {record.wordpress_post_id}")
+                    except Exception as e:
+                        logger.error(f"  📱 Telegram: excepción — {e}")
+
+            except Exception as e:
+                logger.error(f"  Error procesando WP post {record.wordpress_post_id}: {e}")
 
             db.commit()
 
@@ -263,7 +274,7 @@ def start_scheduler() -> BackgroundScheduler:
     logger.info("  Ingesta RSS:    cada 20 minutos")
     logger.info("  NLP:            cada 20 minutos")
     logger.info("  Clustering:     7am, 1pm, 7pm (hora RD)")
-    logger.info("  Social sync:    cada 10 minutos")
+    logger.info("  Social sync:    cada 10 minutos — 1 artículo por ciclo (escalonado)")
     logger.info("  Newsletter:     domingos 8am RD")
     logger.info("=" * 60)
 
@@ -303,7 +314,7 @@ def start_scheduler() -> BackgroundScheduler:
         trigger="interval",
         minutes=10,
         id="social_sync",
-        name="Sincronización WordPress→Facebook+Telegram",
+        name="Sincronización WordPress→Facebook+Telegram (escalonado)",
         replace_existing=True,
     )
 
