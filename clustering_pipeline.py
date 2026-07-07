@@ -7,7 +7,7 @@ Flujo:
   1. Agrupa los artículos crudos recientes en clusters (deduplicator_clusters).
   2. Ordena los clusters por: primero multi-medio (tendencias), luego por
      prioridad de categoría (política > sociedad > economía > internacional > ...).
-  3. Toma los N mejores (por defecto 20).
+  3. Toma los N mejores (por defecto 25).
   4. Para cada cluster, lee el raw_content de sus artículos y llama a
      create_article() del generador (que sintetiza varias fuentes en UNO).
   5. Publica en WordPress y registra el GeneratedArticle, marcando TODOS los
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 USE_CLUSTERING = True
 
 # ── Parámetros ──
-MAX_ARTICULOS_POR_CICLO = 20
+MAX_ARTICULOS_POR_CICLO = 25
 VENTANA_HORAS = 24
 
 # Prioridad de categorías (menor número = más prioritaria)
@@ -75,7 +75,7 @@ def _ordenar_clusters(clusters):
 def _cargar_raw_content(article_ids):
     """
     Lee el raw_content SOLO de los artículos que vamos a publicar.
-    Devuelve {id: raw_content}. Ligero: solo los ~20 clusters elegidos.
+    Devuelve {id: raw_content}. Ligero: solo los ~25 clusters elegidos.
     """
     from neurodiario.db.database import get_db
     from neurodiario.db.models import Article
