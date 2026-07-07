@@ -91,6 +91,15 @@ SOURCES = [
         "max_articles": 10,
     },
     {
+        "name": "AS - Futbol",
+        # Cubre Mundial 2026, MLB, NBA y deportes internacionales en español
+        "url": "https://feeds.as.com/mrss-s/pages/as/site/as.com/section/futbol/portada",
+        "category": "deportes",
+        "language": "es",
+        "active": True,
+        "max_articles": 10,
+    },
+    {
         "name": "Bloomberg",
         "url": "https://feeds.bloomberg.com/economics/news.rss",
         "category": "economia",
