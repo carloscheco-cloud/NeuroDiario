@@ -8,7 +8,7 @@ Cambios vs versión anterior:
     · Ingesta RSS:  cada 20 min (antes 3)
     · NLP:          cada 20 min (antes 6)
     · Clustering:   3 veces al día (7am, 1pm, 7pm RD) — no cada 8 min
-    · Social sync:  cada 10 min (Facebook + Telegram) — UNO por ciclo (escalonado)
+    · Social sync:  cada 12 min (Facebook + Telegram) — UNO por ciclo (escalonado)
     · Newsletter:   domingos 8am RD
 """
 import logging
@@ -89,9 +89,9 @@ def _job_social_sync():
     """
     Distribuye artículos publicados en WordPress a Facebook y Telegram.
 
-    MODO ESCALONADO: procesa UN solo artículo por ciclo (cada 10 minutos).
-    Así, si publicas 20 artículos de golpe en WordPress, se distribuyen
-    a redes sociales de uno en uno cada ~10 minutos.
+    MODO ESCALONADO: procesa UN solo artículo por ciclo (cada 12 minutos).
+    Así, si publicas 25 artículos de golpe en WordPress, se distribuyen
+    a redes sociales de uno en uno cada ~12 minutos.
     """
     logger.info("=" * 60)
     logger.info("JOB: Sincronización WordPress → Facebook + Telegram (escalonado)")
@@ -274,7 +274,7 @@ def start_scheduler() -> BackgroundScheduler:
     logger.info("  Ingesta RSS:    cada 20 minutos")
     logger.info("  NLP:            cada 20 minutos")
     logger.info("  Clustering:     7am, 1pm, 7pm (hora RD)")
-    logger.info("  Social sync:    cada 10 minutos — 1 artículo por ciclo (escalonado)")
+    logger.info("  Social sync:    cada 12 minutos — 1 artículo por ciclo (escalonado)")
     logger.info("  Newsletter:     domingos 8am RD")
     logger.info("=" * 60)
 
@@ -312,7 +312,7 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.add_job(
         _job_social_sync,
         trigger="interval",
-        minutes=10,
+        minutes=12,
         id="social_sync",
         name="Sincronización WordPress→Facebook+Telegram (escalonado)",
         replace_existing=True,
