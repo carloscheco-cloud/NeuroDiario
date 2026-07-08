@@ -165,13 +165,13 @@ def procesar(publicar: bool = False):
             logger.info(f"[{idx}/{len(seleccionados)}] Generando: {topic[:60]}")
             generated = generator.create_article(trend, articles_para_gen)
 
-            # Publicar en WordPress como borrador
+            # Publicar en WordPress como publish (no draft)
             wp_article = {
                 "title": generated["title"],
                 "content": generated["content"],
                 "categories": [categoria.title()],
                 "tags": generated.get("tags", []),
-                "status": "draft",
+                "status": "publish",
                 "image_url": generated.get("image_url"),
             }
             post_id = publisher.publish(wp_article)
@@ -207,7 +207,7 @@ def _registrar_generado(generated, categoria, article_ids, wp_post_id):
             content=generated["content"],
             category=categoria,
             tags=generated.get("tags", []),
-            status="draft",
+            status="published",
             wordpress_post_id=wp_post_id,
             source_article_id=article_ids[0],
             published_at=datetime.utcnow(),
