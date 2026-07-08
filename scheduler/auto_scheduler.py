@@ -115,7 +115,7 @@ def _job_social_sync():
 
         with get_db() as db:
             pending = db.query(GeneratedArticle).filter(
-                GeneratedArticle.status == "draft",
+                GeneratedArticle.status == "published",
                 GeneratedArticle.wordpress_post_id != None,   # noqa
             ).all()
 
@@ -146,7 +146,6 @@ def _job_social_sync():
                     return
 
                 logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
-                record.status = "published"
 
                 image_candidates = []
                 db_image_url = None
