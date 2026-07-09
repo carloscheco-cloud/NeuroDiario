@@ -340,17 +340,24 @@ class ArticleGenerator:
         self.serper = SerperImageClient(api_key=serper_api_key)
         self.pexels = PexelsClient(api_key=pexels_api_key)
 
-    def _collect_image_candidates(self, query: str, caption: str) -> Tuple[List[str], str]:
+    def _collect_image_candidates(
+        self, query: str, caption: str, tiene_persona: bool = False
+    ) -> Tuple[List[str], str]:
         """
-        Estrategia de 3 niveles, recolectando VARIAS URLs candidatas:
-        1. Serper con filtro de fuentes OFICIALES (gobierno, congreso, partidos)
-        2. Serper busqueda general en Google Images EXCLUYENDO medios dominicanos
-           (sus fotos llevan marca de agua y derechos de autor)
-        3. Pexels (fallback final — CDN abierto, casi nunca falla la descarga)
+        Estrategia de busqueda de imagenes con proteccion de identidad.
+
+        Cuando tiene_persona=False (tema, lugar, evento):
+          Nivel 1 → fuentes oficiales
+          Nivel 2 → Google general (sin medios dominicanos)
+          Nivel 3 → Pexels
+
+        Cuando tiene_persona=True (titular nombra a una persona especifica):
+          Nivel 1 → fuentes oficiales UNICAMENTE (identidad garantizada)
+          Nivel 2 → Pexels con query generica de categoria (SIN nombre de persona)
+                    para evitar devolver una foto de alguien equivocado.
+          Se omite Google general porque es la fuente del error de identidad.
 
         Retorna (lista_de_urls, html_de_la_primera).
-        La lista mantiene el orden de prioridad. Facebook intentara
-        descargar cada una hasta que alguna funcione.
         """
         candidates: List[str] = []
         first_html = ""
@@ -359,35 +366,50 @@ class ArticleGenerator:
             if url and url not in candidates:
                 candidates.append(url)
 
-        # NIVEL 1 — Fuentes oficiales (varias candidatas)
-        logger.info(f"  Buscando imagenes en fuentes oficiales: '{query[:50]}'...")
+        # NIVEL 1 — Fuentes oficiales (siempre, para todos los casos)
+        logger.info(f"  Buscando en fuentes oficiales: '{query[:50]}'...")
         dom_images = self.serper.search_images(query, site_filter=OFFICIAL_SITES_QUERY, limit=5)
         for img in dom_images:
             _add(img.get("url", ""))
             if not first_html:
                 first_html = self.serper.build_image_html(img, caption=caption)
         if dom_images:
-            logger.info(f"  ✓ {len(dom_images)} imagen(es) de fuente(s) oficial(es) encontrada(s)")
+            logger.info(f"  ✓ {len(dom_images)} imagen(es) oficial(es) encontrada(s)")
 
-        # NIVEL 2 — Serper general, excluyendo medios dominicanos
-        logger.info(f"  Buscando en Google general (sin medios locales)...")
-        gen_images = self.serper.search_images(query, limit=5, exclude_sites=EXCLUDED_SITES_QUERY)
-        for img in gen_images:
-            _add(img.get("url", ""))
-            if not first_html:
-                first_html = self.serper.build_image_html(img, caption=caption)
-        if gen_images:
-            logger.info(f"  ✓ {len(gen_images)} imagen(es) general(es) encontrada(s)")
+        if tiene_persona:
+            # NIVEL 2 (persona) — Pexels con query generica, SIN nombre de persona.
+            # Razon: Google general confunde identidades con personas poco conocidas.
+            # Es mejor una foto generica que una foto de la persona equivocada.
+            pexels_query = caption.split()[0] if caption else "politica dominicana"
+            logger.info(f"  Persona detectada — omitiendo Google general para evitar confusion de identidad.")
+            logger.info(f"  Usando Pexels con query generica: '{pexels_query}'...")
+            pex_images = self.pexels.search_images(pexels_query, limit=3)
+            for img in pex_images:
+                _add(img.get("url_medium", ""))
+                if not first_html:
+                    first_html = self.pexels.build_image_html(img, caption=caption)
+            if pex_images:
+                logger.info(f"  ✓ {len(pex_images)} imagen(es) de Pexels agregada(s)")
+        else:
+            # NIVEL 2 (no persona) — Google general excluyendo medios dominicanos
+            logger.info(f"  Buscando en Google general (sin medios locales)...")
+            gen_images = self.serper.search_images(query, limit=5, exclude_sites=EXCLUDED_SITES_QUERY)
+            for img in gen_images:
+                _add(img.get("url", ""))
+                if not first_html:
+                    first_html = self.serper.build_image_html(img, caption=caption)
+            if gen_images:
+                logger.info(f"  ✓ {len(gen_images)} imagen(es) general(es) encontrada(s)")
 
-        # NIVEL 3 — Pexels (red de seguridad: CDN abierto)
-        logger.info(f"  Agregando respaldo de Pexels...")
-        pex_images = self.pexels.search_images(query, limit=3)
-        for img in pex_images:
-            _add(img.get("url_medium", ""))
-            if not first_html:
-                first_html = self.pexels.build_image_html(img, caption=caption)
-        if pex_images:
-            logger.info(f"  ✓ {len(pex_images)} imagen(es) de Pexels agregada(s) como respaldo")
+            # NIVEL 3 — Pexels (red de seguridad final)
+            logger.info(f"  Agregando respaldo de Pexels...")
+            pex_images = self.pexels.search_images(query, limit=3)
+            for img in pex_images:
+                _add(img.get("url_medium", ""))
+                if not first_html:
+                    first_html = self.pexels.build_image_html(img, caption=caption)
+            if pex_images:
+                logger.info(f"  ✓ {len(pex_images)} imagen(es) de Pexels agregada(s) como respaldo")
 
         logger.info(f"  Total de URLs candidatas: {len(candidates)}")
         return candidates, first_html
@@ -396,8 +418,9 @@ class ArticleGenerator:
         """
         Compatibilidad: devuelve (primera_url, html) como antes.
         Internamente ahora usa la recoleccion de candidatas.
+        Sin deteccion de persona (metodo legacy).
         """
-        candidates, html_out = self._collect_image_candidates(query, caption)
+        candidates, html_out = self._collect_image_candidates(query, caption, tiene_persona=False)
         first_url = candidates[0] if candidates else None
         if not first_url:
             logger.warning("  No se encontro imagen en ninguna fuente.")
@@ -444,8 +467,8 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._clean_html(article_html)
             article_html = self._remove_h1_from_html(article_html)
 
-            image_query = self._build_image_query(title, category)
-            image_candidates, image_html = self._collect_image_candidates(image_query, caption=title)
+            image_query, tiene_persona = self._build_image_query(title, category)
+            image_candidates, image_html = self._collect_image_candidates(image_query, caption=title, tiene_persona=tiene_persona)
             image_url = image_candidates[0] if image_candidates else None
 
             footer_html = self._build_footer(source_display, fecha_str, url)
@@ -500,8 +523,8 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._clean_html(article_html)
             article_html = self._remove_h1_from_html(article_html)
 
-            image_query = self._build_image_query(topic, category)
-            image_candidates, image_html = self._collect_image_candidates(image_query, caption=topic)
+            image_query, tiene_persona = self._build_image_query(topic, category)
+            image_candidates, image_html = self._collect_image_candidates(image_query, caption=topic, tiene_persona=tiene_persona)
             image_url = image_candidates[0] if image_candidates else None
 
             fecha_str = fecha_en_espanol(datetime.now())
@@ -567,7 +590,21 @@ Extension: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
             return (text[:200] + "...") if len(text) > 200 else text
         return ""
 
-    def _build_image_query(self, title: str, category: str) -> str:
+    def _build_image_query(self, title: str, category: str) -> Tuple[str, bool]:
+        """
+        Genera la query de imagen y detecta si el titular nombra una persona especifica.
+
+        Retorna (query, tiene_persona):
+        - query: string de busqueda para Google Images
+        - tiene_persona: True si el titular menciona un nombre propio de persona.
+          Cuando es True, _collect_image_candidates restringe la busqueda a fuentes
+          oficiales para evitar confundir identidades.
+
+        Razon del cambio: Google Images puede devolver la foto equivocada cuando se
+        busca por nombre de persona poco conocida. Las fuentes oficiales
+        (gobierno, congreso, partidos) garantizan que la foto corresponde a quien
+        dice el pie de foto.
+        """
         category_fallbacks = {
             "politica":      "gobierno Republica Dominicana politica",
             "economia":      "economia negocios finanzas dominicana",
@@ -585,31 +622,52 @@ Extension: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
             prompt = f"""Dado este titular de noticia: "{title}"
 Categoria: {category}
 
-Genera UNA query de busqueda de 4-6 palabras para encontrar una imagen periodistica real en Google Images.
+Responde en DOS lineas exactas, sin explicacion adicional:
+Linea 1: La query de busqueda (4-6 palabras para Google Images)
+Linea 2: PERSONA o NO_PERSONA (si el titular nombra a una persona real especifica)
 
-REGLAS:
+REGLAS para la query:
 - Si menciona una persona famosa dominicana o internacional, incluye su nombre completo
 - Si menciona un lugar en Republica Dominicana, incluyelo
 - Prioriza terminos en espanol
-- La query debe ser muy especifica para encontrar la imagen correcta
-- Responde SOLO con las palabras clave, sin explicacion
 
 EJEMPLOS:
-Titular: "Abinader anuncia reforma fiscal" - respuesta: Luis Abinader presidente Republica Dominicana 2026
-Titular: "Huracan amenaza el Caribe" - respuesta: huracan tormenta caribe Republica Dominicana
-Titular: "Tigres del Licey ganan campeonato" - respuesta: Tigres Licey beisbol dominicano campeones
-Titular: "Trump critica a la OTAN" - respuesta: Donald Trump Casa Blanca conferencia prensa
-Titular: "Gloria Ceballos explica lluvias" - respuesta: Gloria Ceballos meteorologa dominicana
-Titular: "COE alerta por inundaciones" - respuesta: inundaciones Santo Domingo Republica Dominicana"""
+Titular: "Abinader anuncia reforma fiscal"
+Luis Abinader presidente Republica Dominicana 2026
+PERSONA
 
-            query = self._call_api(prompt, max_tokens=30).strip()
-            query = query.split("\n")[0].strip().strip('"').strip("'").strip(".")
-            if 3 <= len(query) <= 100:
-                return query
-            return fallback
+Titular: "Huracan amenaza el Caribe"
+huracan tormenta caribe Republica Dominicana
+NO_PERSONA
+
+Titular: "Tigres del Licey ganan campeonato"
+Tigres Licey beisbol dominicano campeones
+NO_PERSONA
+
+Titular: "Ginnette Bournigal defiende la Policia"
+Ginnette Bournigal senadora dominicana
+PERSONA
+
+Titular: "COE alerta por inundaciones en el pais"
+inundaciones Santo Domingo Republica Dominicana
+NO_PERSONA"""
+
+            respuesta = self._call_api(prompt, max_tokens=40).strip()
+            lineas = [l.strip() for l in respuesta.split("\n") if l.strip()]
+
+            query = lineas[0].strip('"').strip("'").strip(".") if lineas else fallback
+            tiene_persona = len(lineas) >= 2 and "PERSONA" in lineas[1].upper() and "NO_PERSONA" not in lineas[1].upper()
+
+            if not (3 <= len(query) <= 100):
+                query = fallback
+                tiene_persona = False
+
+            logger.info(f"  Query imagen: '{query}' | persona_detectada={tiene_persona}")
+            return query, tiene_persona
+
         except Exception as e:
             logger.warning(f"Error generando query de imagen: {e}")
-            return fallback
+            return fallback, False
 
     def _build_footer(self, source: str, fecha: str, url: str) -> str:
         url_html = (
