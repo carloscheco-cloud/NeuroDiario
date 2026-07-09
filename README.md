@@ -526,7 +526,22 @@ Genera imágenes estilo BBC (1200×630px) con Pillow: foto de fondo + overlay os
 Publica en canal `@NeuroDiario` vía Bot API. Intenta primero `sendPhoto` con imagen; si falla, usa `sendMessage` con preview. Formato HTML en caption con título en negrita y enlace al artículo.
 
 ### WhatsApp Canal
-Automatizado externamente vía Make.com + Whapi.Cloud (no es parte del código del repositorio).
+
+Canal oficial: [whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t](https://whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t)
+
+La distribución a WhatsApp opera **fuera del código Python**, mediante una automatización en Make.com:
+
+| Componente | Detalle |
+|-----------|---------|
+| Herramienta | Make.com — Scenario "WhatsApp Canal v2" (ID: 5610516) |
+| Frecuencia | Cada 15 minutos |
+| Fuente | RSS de neurodiario.com (`/feed/`, 1 artículo por ciclo) |
+| Extracción imagen | Text Parser Match Pattern extrae `src="([^"]+)"` del campo `<description>` del RSS |
+| Envío | HTTP POST a `https://gate.whapi.cloud/messages/image` |
+| Canal destino | `120363412361118712@newsletter` |
+| Plugin requerido | "Featured Images in RSS" (WordPress) — embebe la imagen en el `<description>` del feed |
+
+> **Hoja de ruta:** Cuando Meta lance su API oficial para canales de WhatsApp, esta integración migrará directamente hacia ella y se integrará al código Python del repositorio.
 
 ---
 
