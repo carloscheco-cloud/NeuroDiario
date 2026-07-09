@@ -1,6 +1,14 @@
 """
 Modulo generador de articulos periodisticos - NeuroDiario
-Imagenes: Serper.dev dominicano (prioritario) -> Serper.dev general -> Pexels (fallback)
+Imagenes: Serper.dev fuentes oficiales (prioritario) -> Serper.dev general con exclusion de medios -> Pexels (fallback)
+
+CAMBIO (jul 2026): Los medios dominicanos comerciales (Diario Libre, Listin, etc.)
+ya NO se usan como fuente de imagenes porque sus fotos llevan marca de agua / logo
+y tienen derechos de autor. Ahora:
+  - Nivel 1 prioriza fuentes OFICIALES (gobierno, congreso, partidos) cuyas fotos
+    de prensa se publican para uso de los medios.
+  - Nivel 2 busca en Google general EXCLUYENDO los dominios de esos medios.
+  - BLOCKED_DOMAINS actua como red de seguridad final.
 """
 
 import logging
@@ -26,23 +34,63 @@ def fecha_en_espanol(dt: datetime) -> str:
     return f"{dt.day} de {MESES_ES[dt.month]} de {dt.year}"
 
 
-# Sitios dominicanos con buenas imágenes — se busca aquí primero
-DOMINICAN_IMAGE_SITES = [
-    "diariolibre.com",
-    "elnacional.com.do",
-    "n.com.do",
-    "eldia.com.do",
-    "listindiario.com",
-    "elcaribe.com.do",
-    "acento.com.do",
+# ─────────────────────────────────────────────
+# FUENTES DE IMAGENES
+# ─────────────────────────────────────────────
+
+# Fuentes OFICIALES dominicanas — se busca aqui PRIMERO.
+# Sus fotos de prensa se publican para que los medios las usen,
+# no llevan marca de agua de medios competidores y la identidad
+# de las personas retratadas es confiable.
+OFFICIAL_IMAGE_SITES = [
+    # Gobierno
     "presidencia.gob.do",
     "mirex.gob.do",
     "mepyd.gob.do",
     "mitur.gob.do",
+    "micm.gob.do",
+    "minerd.gob.do",
+    "msp.gob.do",
+    "mopc.gob.do",
+    "hacienda.gob.do",
+    # Congreso y organos electorales
+    "senadord.gob.do",
+    "camaradediputados.gob.do",
+    "jce.gob.do",
+    # Partidos politicos (salas de prensa)
+    "fuerzadelpueblo.org.do",
+    "prm.org.do",
+    "pldaldia.com",
 ]
 
-# Query de sitios dominicanos para Serper (formato site: OR site:)
-DOMINICAN_SITES_QUERY = " OR ".join(f"site:{d}" for d in DOMINICAN_IMAGE_SITES)
+# Query de fuentes oficiales para Serper (formato site: OR site:)
+OFFICIAL_SITES_QUERY = " OR ".join(f"site:{d}" for d in OFFICIAL_IMAGE_SITES)
+
+# Medios dominicanos comerciales — EXCLUIDOS de toda busqueda de imagenes.
+# Sus fotos llevan logo/marca de agua y tienen derechos de autor.
+EXCLUDED_MEDIA_SITES = [
+    "diariolibre.com",
+    "listindiario.com",
+    "elnacional.com.do",
+    "eldia.com.do",
+    "elcaribe.com.do",
+    "hoy.com.do",
+    "n.com.do",
+    "ndigital.com.do",
+    "acento.com.do",
+    "elnuevodiario.com.do",
+    "diariodominicano.com",
+    "almomento.net",
+    "noticiassin.com",
+    "cdn.com.do",
+    "z101digital.com",
+    "remolacha.net",
+    "periodicoeljaya.com",
+    "proceso.com.do",
+]
+
+# String de exclusion para el query de Google (formato -site: -site:)
+EXCLUDED_SITES_QUERY = " ".join(f"-site:{d}" for d in EXCLUDED_MEDIA_SITES)
 
 
 SYSTEM_PROMPT = """Eres el redactor principal de NeuroDiario, el medio digital mas inteligente de Republica Dominicana. Tu escritura es clara, profesional, directa y dominicana como un periodista senior con criterio propio.
@@ -85,7 +133,10 @@ class SerperImageClient:
 
     BASE_URL = "https://google.serper.dev/images"
 
+    # Red de seguridad: aunque el query ya excluye estos dominios via -site:,
+    # aqui se descarta cualquier URL que se cuele (CDNs, subdominios, cache).
     BLOCKED_DOMAINS = [
+        # Redes sociales (no cargan en WordPress)
         "fbsbx.com",
         "lookaside.facebook.com",
         "lookaside.instagram.com",
@@ -94,6 +145,25 @@ class SerperImageClient:
         "tiktok.com",
         "ytimg.com",
         "youtube.com",
+        # Medios dominicanos con marca de agua / derechos de autor
+        "diariolibre.com",
+        "listindiario.com",
+        "elnacional.com.do",
+        "eldia.com.do",
+        "elcaribe.com.do",
+        "hoy.com.do",
+        "n.com.do",
+        "ndigital.com.do",
+        "acento.com.do",
+        "elnuevodiario.com.do",
+        "diariodominicano.com",
+        "almomento.net",
+        "noticiassin.com",
+        "cdn.com.do",
+        "z101digital.com",
+        "remolacha.net",
+        "periodicoeljaya.com",
+        "proceso.com.do",
     ]
 
     def __init__(self, api_key: Optional[str] = None):
@@ -105,22 +175,33 @@ class SerperImageClient:
     def search_image(self, query: str, site_filter: Optional[str] = None) -> Optional[Dict]:
         """
         Busca una imagen en Google Images via Serper.
-        Si site_filter se provee, se agrega como prefijo al query (ej. "site:diariolibre.com OR site:elnacional.com.do").
+        Si site_filter se provee, se agrega como prefijo al query (ej. "site:presidencia.gob.do OR site:prm.org.do").
         Retorna la PRIMERA imagen valida (comportamiento original, se mantiene por compatibilidad).
         """
         results = self.search_images(query, site_filter=site_filter, limit=1)
         return results[0] if results else None
 
-    def search_images(self, query: str, site_filter: Optional[str] = None, limit: int = 5) -> List[Dict]:
+    def search_images(
+        self,
+        query: str,
+        site_filter: Optional[str] = None,
+        limit: int = 5,
+        exclude_sites: Optional[str] = None,
+    ) -> List[Dict]:
         """
         Igual que search_image pero devuelve VARIAS imagenes validas (hasta `limit`).
         Esto permite tener URLs de respaldo si la primera falla al descargarse.
+
+        exclude_sites: string de exclusiones estilo "-site:dominio.com -site:otro.com"
+        que se agrega al final del query para que Google NO devuelva esos dominios.
         """
         if not self.api_key:
             logger.warning("SERPER_API_KEY no configurada.")
             return []
 
         full_query = f"({site_filter}) {query}" if site_filter else query
+        if exclude_sites:
+            full_query = f"{full_query} {exclude_sites}"
         found: List[Dict] = []
 
         try:
@@ -261,13 +342,14 @@ class ArticleGenerator:
 
     def _collect_image_candidates(self, query: str, caption: str) -> Tuple[List[str], str]:
         """
-        Estrategia de 3 niveles, ahora recolectando VARIAS URLs candidatas:
-        1. Serper con filtro de sitios dominicanos (prioritario)
-        2. Serper búsqueda general en Google Images
+        Estrategia de 3 niveles, recolectando VARIAS URLs candidatas:
+        1. Serper con filtro de fuentes OFICIALES (gobierno, congreso, partidos)
+        2. Serper busqueda general en Google Images EXCLUYENDO medios dominicanos
+           (sus fotos llevan marca de agua y derechos de autor)
         3. Pexels (fallback final — CDN abierto, casi nunca falla la descarga)
 
         Retorna (lista_de_urls, html_de_la_primera).
-        La lista mantiene el orden de prioridad. Facebook intentará
+        La lista mantiene el orden de prioridad. Facebook intentara
         descargar cada una hasta que alguna funcione.
         """
         candidates: List[str] = []
@@ -277,19 +359,19 @@ class ArticleGenerator:
             if url and url not in candidates:
                 candidates.append(url)
 
-        # NIVEL 1 — Sitios dominicanos (varias candidatas)
-        logger.info(f"  Buscando imagenes en sitios dominicanos: '{query[:50]}'...")
-        dom_images = self.serper.search_images(query, site_filter=DOMINICAN_SITES_QUERY, limit=5)
+        # NIVEL 1 — Fuentes oficiales (varias candidatas)
+        logger.info(f"  Buscando imagenes en fuentes oficiales: '{query[:50]}'...")
+        dom_images = self.serper.search_images(query, site_filter=OFFICIAL_SITES_QUERY, limit=5)
         for img in dom_images:
             _add(img.get("url", ""))
             if not first_html:
                 first_html = self.serper.build_image_html(img, caption=caption)
         if dom_images:
-            logger.info(f"  ✓ {len(dom_images)} imagen(es) dominicana(s) encontrada(s)")
+            logger.info(f"  ✓ {len(dom_images)} imagen(es) de fuente(s) oficial(es) encontrada(s)")
 
-        # NIVEL 2 — Serper general (varias candidatas)
-        logger.info(f"  Buscando en Google general...")
-        gen_images = self.serper.search_images(query, limit=5)
+        # NIVEL 2 — Serper general, excluyendo medios dominicanos
+        logger.info(f"  Buscando en Google general (sin medios locales)...")
+        gen_images = self.serper.search_images(query, limit=5, exclude_sites=EXCLUDED_SITES_QUERY)
         for img in gen_images:
             _add(img.get("url", ""))
             if not first_html:
