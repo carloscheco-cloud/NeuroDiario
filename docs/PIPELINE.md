@@ -81,3 +81,30 @@ flowchart LR
 5. **Facebook**: genera imagen 1200×630 con Pillow (foto + overlay + título + barra de marca) → publica vía Graph API `/photos`
 6. **Telegram**: publica con `sendPhoto` (fallback a `sendMessage`)
 7. Registra `facebook_post_id` y `telegram_message_id` en BD
+
+## WhatsApp Canal (flujo externo)
+
+La distribución al canal de WhatsApp opera **completamente fuera del código Python**, mediante Make.com y Whapi.Cloud.
+
+**Canal**: [whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t](https://whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t)
+
+| Componente | Detalle |
+|-----------|---------|
+| Plataforma | Make.com — Scenario "WhatsApp Canal v2" (ID: 5610516) |
+| Frecuencia | Cada 15 minutos |
+| Trigger | RSS de `https://neurodiario.com/feed/` (1 ítem por ciclo) |
+| Extracción de imagen | Text Parser con patrón `src="([^"]+)"` sobre el campo `<description>` del RSS |
+| Envío | HTTP POST a `https://gate.whapi.cloud/messages/image` |
+| Canal destino | `120363412361118712@newsletter` |
+| Dependencia WordPress | Plugin "Featured Images in RSS" — embebe la imagen destacada en `<description>` |
+| Límite RSS | Feed configurado a 30 ítems (para cubrir los lotes de 20 artículos por ciclo) |
+
+**Flujo paso a paso:**
+1. WordPress publica artículo con imagen destacada
+2. Plugin embebe la imagen en el campo `<description>` del RSS
+3. Make.com lee el feed cada 15 min y obtiene el ítem más reciente
+4. Text Parser extrae la URL de imagen con regex `src="([^"]+)"`
+5. HTTP POST a Whapi.Cloud con la imagen y el enlace al artículo
+6. Whapi.Cloud entrega el mensaje al canal
+
+> **Hoja de ruta:** Cuando Meta lance su API oficial para canales de WhatsApp, esta integración migrará al código Python del repositorio como un módulo `publisher/whatsapp_publisher.py`, reemplazando la dependencia de Make.com y Whapi.Cloud.

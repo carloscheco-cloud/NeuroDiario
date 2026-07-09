@@ -8,7 +8,7 @@
 - Imágenes: priorización de fuentes oficiales, exclusión de medios comerciales
 - Múltiples URLs candidatas para imágenes (fallback en cascada)
 - Newsletter semanal vía Mailchimp con PDF adjunto
-- Integración con WhatsApp Canal vía Make.com + Whapi.Cloud (externa al repo)
+- Integración con WhatsApp Canal vía Make.com (Scenario ID 5610516) + Whapi.Cloud — canal [whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t](https://whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t). Pendiente de migración a API oficial de Meta cuando esté disponible.
 
 ### Pipeline Activo
 - Ingesta RSS: cada 20 minutos

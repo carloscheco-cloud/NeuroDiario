@@ -27,6 +27,10 @@ flowchart TD
     P --> Q["📘 Facebook<br>imagen BBC 1200×630"]
     P --> R["📱 Telegram<br>sendPhoto + caption"]
     P --> S["📧 Newsletter<br>Mailchimp (domingos)"]
+    
+    O --> T["📡 RSS WordPress<br>/feed/ — 30 ítems"]
+    T --> U["⚙️ Make.com<br>cada 15 min<br>Scenario 5610516"]
+    U --> V["💬 WhatsApp Canal<br>Whapi.Cloud<br>@NeuroDiario"]
 
     style A fill:#e3f2fd
     style F fill:#f3e8fd
@@ -36,6 +40,8 @@ flowchart TD
     style Q fill:#e8f0fe
     style R fill:#e8f5e9
     style S fill:#fce8e6
+    style V fill:#dcf8c6
+    style U fill:#fff8e1
 ```
 
 ## Transformaciones de Datos
@@ -55,3 +61,4 @@ flowchart TD
 | Publicar | Artículo + imagen | WordPress REST API | wordpress_post_id |
 | Facebook | Título + imagen + URL | Pillow compositing + Graph API | facebook_post_id |
 | Telegram | Título + imagen + URL | Bot API sendPhoto | telegram_message_id |
+| WhatsApp | RSS feed actualizado | Make.com → Whapi.Cloud | Mensaje en canal @NeuroDiario |
