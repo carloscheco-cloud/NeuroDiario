@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 USE_CLUSTERING = True
 
 # ── Parámetros ──
-MAX_ARTICULOS_POR_CICLO = 25
+MAX_ARTICULOS_POR_CICLO = 20
 VENTANA_HORAS = 24
 
 # Prioridad de categorías (menor número = más prioritaria)
