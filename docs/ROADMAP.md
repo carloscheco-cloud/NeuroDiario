@@ -1,107 +1,47 @@
-# Roadmap de NeuroDiario
+# Roadmap
 
-## Estado Actual: v0.1.0 — Estructura Base
+## Estado Actual
 
-La estructura del proyecto está definida con todos los módulos base implementados.
-El pipeline completo está diseñado pero requiere integración y pruebas end-to-end.
+NeuroDiario opera como pipeline completo y autónomo: ingesta RSS, NLP, generación con clustering, publicación en WordPress, distribución a Facebook y Telegram, y newsletter semanal.
 
----
+## Mejoras Sugeridas (no implementadas)
 
-## v0.2.0 — Ingesta Funcional
-**Objetivo:** Pipeline de recolección de noticias operativo en producción.
+### Infraestructura
+- CI/CD con GitHub Actions (tests automáticos en PR)
+- Health check endpoint para monitoreo externo
+- Alertas automáticas por fallos en el pipeline (Slack, email)
+- Métricas de Prometheus para observabilidad
 
-- [ ] Implementar `RSSFetcher.save_to_db()` con lógica de upsert por URL
-- [ ] Añadir selectores CSS específicos por dominio en `sources_config.py`
-- [ ] Implementar rate limiting y reintentos en `ArticleParser`
-- [ ] Ampliar lista de fuentes dominicanas (meta: 15+ medios)
-- [ ] Añadir soporte para fuentes sin RSS (scraping directo)
-- [ ] Dashboard básico de monitoreo de ingesta
-- [ ] Dockerizar la aplicación (Dockerfile + docker-compose.yml)
+### Contenido
+- Caché de respuestas de Claude para temas recurrentes
+- Evaluación humana de calidad editorial (formulario de revisión)
+- Detección de noticias falsas o sensacionalistas
+- Contenido evergreen y series temáticas
+- Generación multiformat: hilos de X, posts de Instagram
 
-**Criterio de éxito:** > 200 artículos nuevos por día en la BD.
+### NLP
+- Fine-tuning del modelo spaCy con corpus dominicano
+- Clasificador ML entrenado con datos reales
+- Detección de sentimiento por artículo
+- Extracción de citas textuales con atribución
+- Pipeline NLP asíncrono con asyncio
 
----
+### Publicación
+- Dashboard web de administración
+- Sistema de aprobación humana antes de publicar
+- Análisis de rendimiento de artículos (vistas, engagement)
+- Soporte para múltiples sitios WordPress
 
-## v0.3.0 — NLP Robusto
-**Objetivo:** Procesamiento NLP preciso para noticias en español dominicano.
+### Datos
+- API REST pública para consumo por terceros
+- Scraping de portales gubernamentales (transparencia, contratos)
+- Análisis de redes sociales como fuentes
+- Base de datos de funcionarios públicos
 
-- [ ] Fine-tuning del modelo spaCy con corpus dominicano
-- [ ] Clasificador ML entrenado con datos reales (reemplaza heurística de keywords)
-- [ ] Detección de sentimiento por artículo
-- [ ] Extracción de citas textuales y atribución a fuentes
-- [ ] Pipeline NLP asíncrono con `asyncio` para mayor rendimiento
-- [ ] Implementar `EntityExtractor` con `nlp.pipe()` para lotes grandes
-- [ ] Métricas de calidad del clasificador (precisión, recall, F1)
-
-**Criterio de éxito:** Clasificación correcta > 85% en conjunto de validación.
-
----
-
-## v0.4.0 — Generación con IA Avanzada
-**Objetivo:** Artículos generados de alta calidad periodística.
-
-- [ ] Implementar `generate_summary()` y `generate_analysis()` en producción
-- [ ] Sistema de prompts versionados y evaluables
-- [ ] Generación de títulos SEO optimizados
-- [ ] Detección automática de noticias falsas o sensacionalistas
-- [ ] Generación multiformat: artículo, hilo de Twitter, post de Instagram
-- [ ] Caché de respuestas para temas recurrentes
-- [ ] Evaluación humana de calidad (formulario de revisión editorial)
-
-**Criterio de éxito:** Score editorial > 7/10 en revisión humana.
-
----
-
-## v0.5.0 — Publicación Automatizada
-**Objetivo:** Pipeline de publicación en WordPress completamente automatizado.
-
-- [ ] Implementar `WordPressPublisher.publish()` en producción
-- [ ] Implementar `get_categories()` y `update_post()`
-- [ ] Sistema de aprobación humana antes de publicar (modo staging)
-- [ ] Imágenes automáticas con DALL-E o Unsplash API
-- [ ] Soporte para múltiples sitios WordPress
-- [ ] Notificaciones por email/Slack al publicar
-
-**Criterio de éxito:** Publicación automática de 3+ artículos diarios sin intervención.
-
----
-
-## v1.0.0 — Producción
-**Objetivo:** Sistema estable, monitoreado y escalable.
-
-- [ ] CI/CD completo (GitHub Actions)
-- [ ] Tests de integración end-to-end
-- [ ] Monitoreo con Prometheus + Grafana
-- [ ] Alertas automáticas por fallos en el pipeline
-- [ ] Documentación de API interna
-- [ ] Sistema de análisis de rendimiento de artículos (vistas, engagement)
-- [ ] Panel de administración web
-- [ ] Soporte multiidioma (inglés para audiencia diáspora)
-
-**Criterio de éxito:** Sistema en producción con uptime > 99% durante 30 días.
-
----
-
-## Backlog Futuro
-
-- Análisis de redes sociales (Twitter/X, Instagram) como fuentes adicionales
-- API REST pública para consumo de datos por terceros
+### Escalabilidad
+- Expansión a otros mercados caribeños
+- Soporte multiidioma (inglés para diáspora)
 - App móvil con resúmenes personalizados
-- Modelo de suscripción premium con análisis exclusivos
-- Colaboración con periodistas dominicanos para validación editorial
-- Expansión a otros mercados caribeños (Puerto Rico, Cuba, Haití)
+- Modelo de suscripción premium
 
----
-
-## Contribuciones
-
-Para contribuir al proyecto:
-1. Revisa los issues abiertos en GitHub
-2. Asigna el issue a tu usuario antes de empezar
-3. Crea una rama con el formato `feature/descripcion-corta`
-4. Abre un PR con descripción detallada y tests
-5. El PR debe pasar todos los tests y revisión de código
-
----
-
-*Última actualización: Marzo 2026*
+> Estas mejoras están separadas de las funcionalidades existentes. Ninguna está implementada en el código actual.
