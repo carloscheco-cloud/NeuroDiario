@@ -1,6 +1,7 @@
 """
 Modulo generador de articulos periodisticos - NeuroDiario
 Imagenes: Serper.dev fuentes oficiales (prioritario) -> Serper.dev general con exclusion de medios -> Pexels (fallback)
+          -> Imagenes de marca NeuroDiario (fallback final garantizado)
 
 CAMBIO (jul 2026): Los medios dominicanos comerciales (Diario Libre, Listin, etc.)
 ya NO se usan como fuente de imagenes porque sus fotos llevan marca de agua / logo
@@ -9,11 +10,38 @@ y tienen derechos de autor. Ahora:
     de prensa se publican para uso de los medios.
   - Nivel 2 busca en Google general EXCLUYENDO los dominios de esos medios.
   - BLOCKED_DOMAINS actua como red de seguridad final.
+
+CAMBIO (10 jul 2026) — Sistema de imagenes de marca:
+  Problema detectado: articulos publicados con la foto de una persona EQUIVOCADA
+  (caso Jean Alain, obituario de Freddy Garcia, nota de Trump con foto de stock).
+  Causa raiz: Serper y Pexels emparejan por PALABRAS, no por CARAS. Una foto de
+  persona equivocada es peor que una imagen generica.
+
+  Nueva politica:
+  1. NOTA LUCTUOSA (fallece, muere, luto...): se usa SIEMPRE la imagen de lazo
+     negro "En Memoria" de NeuroDiario. No se busca foto del fallecido (riesgo
+     alto de identidad equivocada, como paso con Freddy Garcia).
+  2. PERSONA detectada: solo se aceptan fotos de fuentes OFICIALES. Si no hay,
+     se usa una imagen generica de marca NeuroDiario. Pexels ELIMINADO como
+     fallback en este caso (era la causa de la foto falsa de "Trump").
+  3. ARTICULO ABSTRACTO (opinion/analisis sin tema visual concreto, ej. "La
+     fragmentacion de la simbiosis perfecta"): imagen generica de marca directa,
+     sin busqueda.
+  4. Cualquier articulo que termine sin imagen: generica de marca. Ningun
+     articulo sale ya sin imagen destacada.
+
+  Las 4 imagenes de marca viven en la mediateca de WordPress:
+    neurodiario-generica-1, neurodiario-generica-2, neurodiario-generica-3,
+    neurodiario-luctuosa
+  Sus IDs se resuelven automaticamente via REST API publica al primer uso
+  (BrandedImageLibrary), con URLs hardcodeadas como respaldo si la API falla.
 """
 
 import logging
 import re
 import os
+import random
+import unicodedata
 import requests
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
@@ -91,6 +119,129 @@ EXCLUDED_MEDIA_SITES = [
 
 # String de exclusion para el query de Google (formato -site: -site:)
 EXCLUDED_SITES_QUERY = " ".join(f"-site:{d}" for d in EXCLUDED_MEDIA_SITES)
+
+
+# ─────────────────────────────────────────────
+# IMAGENES DE MARCA NEURODIARIO (fallback garantizado)
+# ─────────────────────────────────────────────
+
+# Nombres de archivo en la mediateca de WordPress (sin extension)
+BRAND_GENERIC_NAMES = [
+    "neurodiario-generica-1",
+    "neurodiario-generica-2",
+    "neurodiario-generica-3",
+]
+BRAND_LUCTUOSA_NAME = "neurodiario-luctuosa"
+
+# URLs de respaldo por si la REST API no responde al resolver los IDs.
+# Corresponden a la carpeta de subida de julio 2026.
+BRAND_FALLBACK_URLS = {
+    "neurodiario-generica-1": "https://neurodiario.com/wp-content/uploads/2026/07/neurodiario-generica-1.png",
+    "neurodiario-generica-2": "https://neurodiario.com/wp-content/uploads/2026/07/neurodiario-generica-2.png",
+    "neurodiario-generica-3": "https://neurodiario.com/wp-content/uploads/2026/07/neurodiario-generica-3.png",
+    "neurodiario-luctuosa":   "https://neurodiario.com/wp-content/uploads/2026/07/neurodiario-luctuosa.png",
+}
+
+# Palabras clave (sin acentos, en minusculas) que identifican una nota luctuosa.
+# El titular se normaliza (sin acentos, minusculas) antes de comparar.
+LUCTUOSA_KEYWORDS = [
+    "fallece", "fallecio", "fallecimiento", "fallecida", "fallecido",
+    "muere", "murio", "muerte de",
+    "pierde la vida", "perdio la vida",
+    "luto", "deceso", "obito", "obituario",
+    "en memoria de", "qepd", "q.e.p.d",
+    "pesame", "condolencias", "postumo", "postuma",
+    "velatorio", "sepelio", "exequias", "acto funebre", "honras funebres",
+]
+
+
+def _normalizar_texto(texto: str) -> str:
+    """Minusculas y sin acentos, para comparaciones robustas de keywords."""
+    texto = texto.lower()
+    texto = unicodedata.normalize("NFD", texto)
+    return "".join(c for c in texto if unicodedata.category(c) != "Mn")
+
+
+def es_nota_luctuosa(titulo: str) -> bool:
+    """True si el titular corresponde a una nota de fallecimiento."""
+    normalizado = _normalizar_texto(titulo or "")
+    return any(kw in normalizado for kw in LUCTUOSA_KEYWORDS)
+
+
+class BrandedImageLibrary:
+    """
+    Resuelve y cachea las imagenes de marca de NeuroDiario desde la mediateca
+    de WordPress via REST API publica (/wp-json/wp/v2/media?search=...).
+
+    No requiere credenciales: el endpoint de media es publico para adjuntos
+    ya subidos. Si la API falla, usa las URLs hardcodeadas de respaldo.
+    """
+
+    def __init__(self, wp_base_url: Optional[str] = None):
+        base = wp_base_url or os.getenv("WORDPRESS_URL", "https://neurodiario.com")
+        # WORDPRESS_URL puede venir con /wp-json o rutas extra; nos quedamos con el dominio base
+        base = base.rstrip("/")
+        base = re.sub(r"/wp-json.*$", "", base)
+        self.base_url = base
+        self._cache: Optional[Dict[str, Dict]] = None
+
+    def _resolve_one(self, name: str) -> Dict:
+        """Busca una imagen por nombre en la mediateca. Retorna {'id', 'url'}."""
+        try:
+            resp = requests.get(
+                f"{self.base_url}/wp-json/wp/v2/media",
+                params={"search": name, "per_page": 10, "media_type": "image"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            for item in resp.json():
+                slug = (item.get("slug") or "")
+                source_url = (item.get("source_url") or "")
+                if name in slug or name in source_url:
+                    logger.info(f"  Imagen de marca resuelta: {name} -> ID {item['id']}")
+                    return {"id": item["id"], "url": source_url}
+            logger.warning(f"  Imagen de marca '{name}' no encontrada via REST API; usando URL de respaldo.")
+        except Exception as e:
+            logger.warning(f"  Error resolviendo imagen de marca '{name}' via REST API: {e}. Usando URL de respaldo.")
+        return {"id": None, "url": BRAND_FALLBACK_URLS[name]}
+
+    def _load(self):
+        if self._cache is not None:
+            return
+        self._cache = {}
+        for name in BRAND_GENERIC_NAMES + [BRAND_LUCTUOSA_NAME]:
+            self._cache[name] = self._resolve_one(name)
+
+    def get_generic(self) -> Dict:
+        """Retorna una imagen generica de marca al azar (rotacion entre las 3)."""
+        self._load()
+        name = random.choice(BRAND_GENERIC_NAMES)
+        info = self._cache[name]
+        return {
+            "url": info["url"],
+            "url_medium": info["url"],
+            "media_id": info["id"],
+            "source": "NeuroDiario",
+            "source_url": self.base_url,
+            "alt": "NeuroDiario",
+            "provider": "neurodiario",
+            "title": "NeuroDiario",
+        }
+
+    def get_luctuosa(self) -> Dict:
+        """Retorna la imagen de lazo negro 'En Memoria'."""
+        self._load()
+        info = self._cache[BRAND_LUCTUOSA_NAME]
+        return {
+            "url": info["url"],
+            "url_medium": info["url"],
+            "media_id": info["id"],
+            "source": "NeuroDiario",
+            "source_url": self.base_url,
+            "alt": "En Memoria - NeuroDiario",
+            "provider": "neurodiario",
+            "title": "En Memoria",
+        }
 
 
 SYSTEM_PROMPT = """Eres el redactor principal de NeuroDiario, el medio digital mas inteligente de Republica Dominicana. Tu escritura es clara, profesional, directa y dominicana como un periodista senior con criterio propio.
@@ -264,10 +415,15 @@ class SerperImageClient:
 
 
 # ─────────────────────────────────────────────
-# CLIENTE PEXELS (FALLBACK FINAL)
+# CLIENTE PEXELS (FALLBACK - solo para temas SIN persona)
 # ─────────────────────────────────────────────
 class PexelsClient:
-    """Fallback de imagenes cuando Serper no encuentra resultados."""
+    """
+    Fallback de imagenes cuando Serper no encuentra resultados.
+    IMPORTANTE (jul 2026): ya NO se usa cuando el articulo trata de una persona
+    especifica, porque sus fotos de stock muestran personas reales que el lector
+    puede confundir con el protagonista de la noticia.
+    """
 
     BASE_URL = "https://api.pexels.com/v1/search"
 
@@ -324,7 +480,7 @@ class PexelsClient:
 # GENERADOR PRINCIPAL
 # ─────────────────────────────────────────────
 class ArticleGenerator:
-    """Genera articulos periodisticos usando Claude + Serper Images + Pexels fallback."""
+    """Genera articulos periodisticos usando Claude + Serper Images + imagenes de marca como fallback."""
 
     def __init__(
         self,
@@ -339,34 +495,81 @@ class ArticleGenerator:
         self.client = anthropic.Anthropic(api_key=api_key)
         self.serper = SerperImageClient(api_key=serper_api_key)
         self.pexels = PexelsClient(api_key=pexels_api_key)
+        self.brand_images = BrandedImageLibrary()
+
+    def _branded_image_html(self, image: Dict, caption: str = "") -> str:
+        """HTML minimo para las imagenes de marca (sin credito externo)."""
+        cap_text = caption or image.get("alt", "NeuroDiario")
+        return (
+            f'<figure class="nd-featured-image" style="margin:0 0 24px 0;padding:0;">'
+            f'<img src="{image["url"]}" alt="{cap_text}" loading="lazy" '
+            f'style="width:100%;max-width:680px;height:360px;object-fit:cover;display:block;border-radius:6px;" />'
+            f'</figure>'
+        )
 
     def _collect_image_candidates(
-        self, query: str, caption: str, tiene_persona: bool = False
-    ) -> Tuple[List[str], str]:
+        self,
+        query: str,
+        caption: str,
+        tiene_persona: bool = False,
+        es_abstracto: bool = False,
+        es_luctuosa: bool = False,
+    ) -> Tuple[List[str], str, Optional[int]]:
         """
         Estrategia de busqueda de imagenes con proteccion de identidad.
 
-        Cuando tiene_persona=False (tema, lugar, evento):
-          Nivel 1 → fuentes oficiales
-          Nivel 2 → Google general (sin medios dominicanos)
-          Nivel 3 → Pexels
+        Orden de decision:
 
-        Cuando tiene_persona=True (titular nombra a una persona especifica):
-          Nivel 1 → fuentes oficiales UNICAMENTE (identidad garantizada)
-          Nivel 2 → Pexels con query generica de categoria (SIN nombre de persona)
-                    para evitar devolver una foto de alguien equivocado.
-          Se omite Google general porque es la fuente del error de identidad.
+        1. es_luctuosa=True → lazo negro "En Memoria" SIEMPRE, sin busqueda.
+           (Nunca mas un obituario con la foto de otra persona.)
 
-        Retorna (lista_de_urls, html_de_la_primera).
+        2. es_abstracto=True (opinion/analisis sin tema visual) → generica de
+           marca directa, sin busqueda.
+
+        3. tiene_persona=True:
+           Nivel 1 → fuentes oficiales UNICAMENTE (identidad garantizada)
+           Fallback → generica de marca NeuroDiario.
+           NO se usa Google general NI Pexels (ambas eran fuentes de fotos de
+           personas equivocadas).
+
+        4. tiene_persona=False (tema, lugar, evento):
+           Nivel 1 → fuentes oficiales
+           Nivel 2 → Google general (sin medios dominicanos)
+           Nivel 3 → Pexels
+           Fallback → generica de marca NeuroDiario.
+
+        Retorna (lista_de_urls, html_de_la_primera, media_id_de_marca_o_None).
+        media_id solo viene cuando la imagen elegida es de marca y su ID en la
+        mediateca de WordPress pudo resolverse (util para que el publicador
+        reutilice el adjunto existente en vez de re-subirlo).
         """
         candidates: List[str] = []
         first_html = ""
+        brand_media_id: Optional[int] = None
 
         def _add(url: str):
             if url and url not in candidates:
                 candidates.append(url)
 
-        # NIVEL 1 — Fuentes oficiales (siempre, para todos los casos)
+        # ── CASO 1: Nota luctuosa → lazo negro directo ──
+        if es_luctuosa:
+            logger.info("  Nota LUCTUOSA detectada → usando lazo negro 'En Memoria' de NeuroDiario.")
+            img = self.brand_images.get_luctuosa()
+            _add(img["url"])
+            first_html = self._branded_image_html(img, caption="En Memoria")
+            brand_media_id = img.get("media_id")
+            return candidates, first_html, brand_media_id
+
+        # ── CASO 2: Articulo abstracto → generica directa ──
+        if es_abstracto:
+            logger.info("  Articulo ABSTRACTO (sin tema visual concreto) → usando imagen generica de NeuroDiario.")
+            img = self.brand_images.get_generic()
+            _add(img["url"])
+            first_html = self._branded_image_html(img, caption=caption)
+            brand_media_id = img.get("media_id")
+            return candidates, first_html, brand_media_id
+
+        # ── NIVEL 1: Fuentes oficiales (siempre) ──
         logger.info(f"  Buscando en fuentes oficiales: '{query[:50]}'...")
         dom_images = self.serper.search_images(query, site_filter=OFFICIAL_SITES_QUERY, limit=5)
         for img in dom_images:
@@ -377,21 +580,16 @@ class ArticleGenerator:
             logger.info(f"  ✓ {len(dom_images)} imagen(es) oficial(es) encontrada(s)")
 
         if tiene_persona:
-            # NIVEL 2 (persona) — Pexels con query generica, SIN nombre de persona.
-            # Razon: Google general confunde identidades con personas poco conocidas.
-            # Es mejor una foto generica que una foto de la persona equivocada.
-            pexels_query = caption.split()[0] if caption else "politica dominicana"
-            logger.info(f"  Persona detectada — omitiendo Google general para evitar confusion de identidad.")
-            logger.info(f"  Usando Pexels con query generica: '{pexels_query}'...")
-            pex_images = self.pexels.search_images(pexels_query, limit=3)
-            for img in pex_images:
-                _add(img.get("url_medium", ""))
-                if not first_html:
-                    first_html = self.pexels.build_image_html(img, caption=caption)
-            if pex_images:
-                logger.info(f"  ✓ {len(pex_images)} imagen(es) de Pexels agregada(s)")
+            # ── CASO 3: Persona → oficiales o generica de marca. Nada mas. ──
+            if not candidates:
+                logger.info("  Persona detectada SIN imagen oficial → usando imagen generica de NeuroDiario.")
+                logger.info("  (Google general y Pexels omitidos: riesgo de foto de persona equivocada.)")
+                img = self.brand_images.get_generic()
+                _add(img["url"])
+                first_html = self._branded_image_html(img, caption=caption)
+                brand_media_id = img.get("media_id")
         else:
-            # NIVEL 2 (no persona) — Google general excluyendo medios dominicanos
+            # ── CASO 4: Sin persona → Google general + Pexels + generica final ──
             logger.info(f"  Buscando en Google general (sin medios locales)...")
             gen_images = self.serper.search_images(query, limit=5, exclude_sites=EXCLUDED_SITES_QUERY)
             for img in gen_images:
@@ -401,18 +599,25 @@ class ArticleGenerator:
             if gen_images:
                 logger.info(f"  ✓ {len(gen_images)} imagen(es) general(es) encontrada(s)")
 
-            # NIVEL 3 — Pexels (red de seguridad final)
-            logger.info(f"  Agregando respaldo de Pexels...")
-            pex_images = self.pexels.search_images(query, limit=3)
-            for img in pex_images:
-                _add(img.get("url_medium", ""))
-                if not first_html:
-                    first_html = self.pexels.build_image_html(img, caption=caption)
-            if pex_images:
-                logger.info(f"  ✓ {len(pex_images)} imagen(es) de Pexels agregada(s) como respaldo")
+            if not candidates:
+                logger.info(f"  Agregando respaldo de Pexels...")
+                pex_images = self.pexels.search_images(query, limit=3)
+                for img in pex_images:
+                    _add(img.get("url_medium", ""))
+                    if not first_html:
+                        first_html = self.pexels.build_image_html(img, caption=caption)
+                if pex_images:
+                    logger.info(f"  ✓ {len(pex_images)} imagen(es) de Pexels agregada(s) como respaldo")
+
+            if not candidates:
+                logger.info("  Ninguna fuente devolvio imagen → usando imagen generica de NeuroDiario.")
+                img = self.brand_images.get_generic()
+                _add(img["url"])
+                first_html = self._branded_image_html(img, caption=caption)
+                brand_media_id = img.get("media_id")
 
         logger.info(f"  Total de URLs candidatas: {len(candidates)}")
-        return candidates, first_html
+        return candidates, first_html, brand_media_id
 
     def _get_image_with_url(self, query: str, caption: str) -> Tuple[Optional[str], str]:
         """
@@ -420,7 +625,7 @@ class ArticleGenerator:
         Internamente ahora usa la recoleccion de candidatas.
         Sin deteccion de persona (metodo legacy).
         """
-        candidates, html_out = self._collect_image_candidates(query, caption, tiene_persona=False)
+        candidates, html_out, _ = self._collect_image_candidates(query, caption, tiene_persona=False)
         first_url = candidates[0] if candidates else None
         if not first_url:
             logger.warning("  No se encontro imagen en ninguna fuente.")
@@ -467,8 +672,15 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._clean_html(article_html)
             article_html = self._remove_h1_from_html(article_html)
 
-            image_query, tiene_persona = self._build_image_query(title, category)
-            image_candidates, image_html = self._collect_image_candidates(image_query, caption=title, tiene_persona=tiene_persona)
+            luctuosa = es_nota_luctuosa(title)
+            image_query, tiene_persona, es_abstracto = self._build_image_query(title, category)
+            image_candidates, image_html, brand_media_id = self._collect_image_candidates(
+                image_query,
+                caption=title,
+                tiene_persona=tiene_persona,
+                es_abstracto=es_abstracto,
+                es_luctuosa=luctuosa,
+            )
             image_url = image_candidates[0] if image_candidates else None
 
             footer_html = self._build_footer(source_display, fecha_str, url)
@@ -488,6 +700,8 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
                 "tags": tags,
                 "image_url": image_url,
                 "image_candidates": image_candidates,
+                "image_media_id": brand_media_id,
+                "image_is_branded": brand_media_id is not None or (image_url or "").startswith(self.brand_images.base_url),
                 "source_citation": {
                     "source": source_display,
                     "url": url,
@@ -523,8 +737,15 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._clean_html(article_html)
             article_html = self._remove_h1_from_html(article_html)
 
-            image_query, tiene_persona = self._build_image_query(topic, category)
-            image_candidates, image_html = self._collect_image_candidates(image_query, caption=topic, tiene_persona=tiene_persona)
+            luctuosa = es_nota_luctuosa(topic)
+            image_query, tiene_persona, es_abstracto = self._build_image_query(topic, category)
+            image_candidates, image_html, brand_media_id = self._collect_image_candidates(
+                image_query,
+                caption=topic,
+                tiene_persona=tiene_persona,
+                es_abstracto=es_abstracto,
+                es_luctuosa=luctuosa,
+            )
             image_url = image_candidates[0] if image_candidates else None
 
             fecha_str = fecha_en_espanol(datetime.now())
@@ -540,6 +761,8 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
                 "tags": [category, "Republica Dominicana", "NeuroDiario"],
                 "image_url": image_url,
                 "image_candidates": image_candidates,
+                "image_media_id": brand_media_id,
+                "image_is_branded": brand_media_id is not None or (image_url or "").startswith(self.brand_images.base_url),
                 "sources": [a.get("url", "") for a in articles if a.get("url")],
             }
         except Exception as e:
@@ -590,20 +813,23 @@ Extension: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
             return (text[:200] + "...") if len(text) > 200 else text
         return ""
 
-    def _build_image_query(self, title: str, category: str) -> Tuple[str, bool]:
+    def _build_image_query(self, title: str, category: str) -> Tuple[str, bool, bool]:
         """
-        Genera la query de imagen y detecta si el titular nombra una persona especifica.
+        Genera la query de imagen y clasifica el titular en tres tipos.
 
-        Retorna (query, tiene_persona):
+        Retorna (query, tiene_persona, es_abstracto):
         - query: string de busqueda para Google Images
         - tiene_persona: True si el titular menciona un nombre propio de persona.
           Cuando es True, _collect_image_candidates restringe la busqueda a fuentes
-          oficiales para evitar confundir identidades.
+          oficiales (o generica de marca) para evitar confundir identidades.
+        - es_abstracto: True si el titular es una pieza de opinion/analisis sin
+          tema visual concreto (ej. "La fragmentacion de la simbiosis perfecta").
+          Cuando es True se usa directamente una imagen generica de NeuroDiario,
+          sin busqueda alguna.
 
         Razon del cambio: Google Images puede devolver la foto equivocada cuando se
-        busca por nombre de persona poco conocida. Las fuentes oficiales
-        (gobierno, congreso, partidos) garantizan que la foto corresponde a quien
-        dice el pie de foto.
+        busca por nombre de persona poco conocida, y los titulares abstractos
+        producian queries sin sentido que devolvian fotos al azar.
         """
         category_fallbacks = {
             "politica":      "gobierno Republica Dominicana politica",
@@ -624,12 +850,18 @@ Categoria: {category}
 
 Responde en DOS lineas exactas, sin explicacion adicional:
 Linea 1: La query de busqueda (4-6 palabras para Google Images)
-Linea 2: PERSONA o NO_PERSONA (si el titular nombra a una persona real especifica)
+Linea 2: PERSONA, NO_PERSONA o ABSTRACTO
+
+DEFINICIONES para la Linea 2:
+- PERSONA: el titular nombra a una persona real especifica (politico, funcionario, atleta, figura publica)
+- NO_PERSONA: el titular trata de un tema, lugar, evento o institucion con imagen concreta posible
+- ABSTRACTO: el titular es una pieza de opinion, reflexion o analisis SIN tema visual concreto (metaforas, conceptos, ensayos)
 
 REGLAS para la query:
 - Si menciona una persona famosa dominicana o internacional, incluye su nombre completo
 - Si menciona un lugar en Republica Dominicana, incluyelo
 - Prioriza terminos en espanol
+- Si es ABSTRACTO, escribe NINGUNA en la Linea 1
 
 EJEMPLOS:
 Titular: "Abinader anuncia reforma fiscal"
@@ -648,6 +880,10 @@ Titular: "Ginnette Bournigal defiende la Policia"
 Ginnette Bournigal senadora dominicana
 PERSONA
 
+Titular: "La fragmentacion de la simbiosis perfecta"
+NINGUNA
+ABSTRACTO
+
 Titular: "COE alerta por inundaciones en el pais"
 inundaciones Santo Domingo Republica Dominicana
 NO_PERSONA"""
@@ -656,18 +892,27 @@ NO_PERSONA"""
             lineas = [l.strip() for l in respuesta.split("\n") if l.strip()]
 
             query = lineas[0].strip('"').strip("'").strip(".") if lineas else fallback
-            tiene_persona = len(lineas) >= 2 and "PERSONA" in lineas[1].upper() and "NO_PERSONA" not in lineas[1].upper()
+            clasificacion = lineas[1].upper() if len(lineas) >= 2 else ""
 
-            if not (3 <= len(query) <= 100):
+            es_abstracto = "ABSTRACTO" in clasificacion or query.upper().startswith("NINGUNA")
+            tiene_persona = (
+                not es_abstracto
+                and "PERSONA" in clasificacion
+                and "NO_PERSONA" not in clasificacion
+            )
+
+            if es_abstracto:
+                query = fallback
+            elif not (3 <= len(query) <= 100):
                 query = fallback
                 tiene_persona = False
 
-            logger.info(f"  Query imagen: '{query}' | persona_detectada={tiene_persona}")
-            return query, tiene_persona
+            logger.info(f"  Query imagen: '{query}' | persona={tiene_persona} | abstracto={es_abstracto}")
+            return query, tiene_persona, es_abstracto
 
         except Exception as e:
             logger.warning(f"Error generando query de imagen: {e}")
-            return fallback, False
+            return fallback, False, False
 
     def _build_footer(self, source: str, fecha: str, url: str) -> str:
         url_html = (
