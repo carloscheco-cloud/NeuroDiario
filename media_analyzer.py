@@ -54,8 +54,8 @@ CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 SERPER_DELAY = 1.5
 # Pausa entre llamadas a Claude Haiku para clasificacion
 CLAUDE_DELAY = 0.5
-# Maximo de resultados por query de Serper (Google limita a 100)
-SERPER_MAX_RESULTS = 100
+# Maximo de resultados por query de Serper (cuenta gratuita: max 10)
+SERPER_MAX_RESULTS = 10
 
 # ─── Medios Dominicanos ──────────────────────────────────────────────────────
 
@@ -297,7 +297,7 @@ def setup_database():
 
 # ─── Serper.dev: Busqueda de articulos ────────────────────────────────────────
 
-def search_serper(query: str, num: int = 100, gl: str = "do", hl: str = "es") -> Dict:
+def search_serper(query: str, num: int = 10, gl: str = "do", hl: str = "es") -> Dict:
     """
     Ejecuta una busqueda en Google via Serper.dev.
     Retorna el JSON completo de respuesta.
@@ -387,47 +387,51 @@ def search_media_articles(
     seen_urls = set()
 
     for year in range(year_start, year_end + 1):
-        query = f'site:{dominio} "{keyword}" after:{year}-01-01 before:{year}-12-31'
-        logger.info(f"  Buscando: {medio['nombre']} | {keyword} | {year}...")
+        # Buscar por semestre para maximizar resultados (max 10 por query en cuenta gratuita)
+        semesters = [
+            (f"{year}-01-01", f"{year}-06-30", "S1"),
+            (f"{year}-07-01", f"{year}-12-31", "S2"),
+        ]
+        for date_start, date_end, sem_label in semesters:
+            query = f'site:{dominio} "{keyword}" after:{date_start} before:{date_end}'
+            logger.info(f"  Buscando: {medio['nombre']} | {keyword} | {year}-{sem_label}...")
 
-        try:
-            result = search_serper(query, num=100)
-        except Exception as e:
-            logger.error(f"  Error en Serper para {year}: {e}")
-            time.sleep(SERPER_DELAY)
-            continue
-
-        organic = result.get("organic", [])
-        count = len(organic)
-        search_info = result.get("searchInformation", {})
-        total_estimated = search_info.get("totalResults", count)
-
-        logger.info(f"    -> {count} resultados (estimado total: {total_estimated})")
-
-        for item in organic:
-            url = item.get("link", "")
-            if url in seen_urls:
+            try:
+                result = search_serper(query, num=10)
+            except Exception as e:
+                logger.error(f"  Error en Serper para {year}-{sem_label}: {e}")
+                time.sleep(SERPER_DELAY)
                 continue
-            seen_urls.add(url)
 
-            article_date = extract_date_from_url(url)
-            section = extract_section_from_url(url)
+            organic = result.get("organic", [])
+            count = len(organic)
 
-            article = {
-                "medio_key": medio_key,
-                "medio_dominio": dominio,
-                "keyword": keyword,
-                "title": item.get("title", ""),
-                "snippet": item.get("snippet", ""),
-                "url": url,
-                "article_date": article_date,
-                "year": article_date.year if article_date else year,
-                "month": article_date.month if article_date else None,
-                "section": section,
-            }
-            all_articles.append(article)
+            logger.info(f"    -> {count} resultados")
 
-        time.sleep(SERPER_DELAY)
+            for item in organic:
+                url = item.get("link", "")
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+
+                article_date = extract_date_from_url(url)
+                section = extract_section_from_url(url)
+
+                article = {
+                    "medio_key": medio_key,
+                    "medio_dominio": dominio,
+                    "keyword": keyword,
+                    "title": item.get("title", ""),
+                    "snippet": item.get("snippet", ""),
+                    "url": url,
+                    "article_date": article_date,
+                    "year": article_date.year if article_date else year,
+                    "month": article_date.month if article_date else None,
+                    "section": section,
+                }
+                all_articles.append(article)
+
+            time.sleep(SERPER_DELAY)
 
     logger.info(f"  Total unico: {len(all_articles)} articulos de {medio['nombre']} sobre '{keyword}' ({year_start}-{year_end})")
     return all_articles
