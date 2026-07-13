@@ -415,21 +415,46 @@ def build():
         "Rafael Arias dirigio el INTRANT durante dos anos completos (agosto 2020 - agosto 2022). Durante "
         "su gestion se inauguraron los corredores de autobuses Churchill y Nunez de Caceres, se implemento "
         "el programa Motoben, y se regularizaron miles de motocicletas. Sin embargo, al buscar su nombre "
-        "en 6 medios dominicanos, aparece en exactamente 1 articulo.", st["body"]))
+        "en 8 medios dominicanos con multiples variaciones de query, aparece en exactamente 1 articulo "
+        "como resultado directo.", st["body"]))
 
     story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        "Para verificar este hallazgo, cruzamos los 811 articulos del estudio institucional del INTRANT "
+        "buscando su nombre en los titulares. El resultado: solo 3 articulos de 811 mencionan a "
+        "Rafael Arias por nombre. Y los tres son sobre su ENTRADA o SALIDA del cargo — ninguno "
+        "sobre su gestion:", st["body"]))
+
+    # The 3 articles table
+    arias_arts = [
+        ["Medio", "Fecha", "Titular"],
+        ["Hoy Digital", "N/D", "¿Quien es Rafael Ernesto Arias Ramirez, el nuevo director del Intrant?"],
+        ["Diario Libre", "2022-08-03", "Quitan a Rafael Arias del Intrant y nombran a Hugo Beras"],
+        ["Listin Diario", "2022-08-04", "Rafael Arias sale del Intrant con una gestion marcada por los ..."],
+    ]
+    at_arias = Table(arias_arts, colWidths=[1.1*inch, 0.8*inch, 3.5*inch])
+    at_arias.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),DGRAY),("TEXTCOLOR",(0,0),(-1,0),WHITE),
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),8),
+        ("GRID",(0,0),(-1,-1),0.5,MGRAY),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LGRAY]),
+    ]))
+    story.append(at_arias)
+
+    story.append(Spacer(1, 8))
     story.append(hbox(
-        "1 articulo en 2 anos. De 6 medios buscados, solo Diario Libre lo menciona por nombre. "
-        "Esto no significa que el INTRANT no fue cubierto — lo fue (126 articulos en ese periodo). "
-        "Significa que los medios hablaron de la institucion sin nombrar a su director.",
+        "3 menciones en 811 articulos. Los medios solo lo nombraron cuando llego y cuando se fue. "
+        "Dos anos de gestion al frente de una institucion que regula el transito de todo un pais, "
+        "y la prensa dominicana no registro su nombre ni una sola vez para hablar de su trabajo.",
         bg=HexColor("#1A1A1A"), fg=DGRAY))
 
     story.append(Spacer(1, 8))
     story.append(Paragraph(
-        "Este hallazgo tiene multiples lecturas. Rafael Arias era ex-dirigente de Conatra (sindicato de "
+        "Este hallazgo tiene multiples lecturas. Rafael Arias era ex-secretario general de Conatra (sindicato de "
         "transporte), lo que pudo generar reservas editoriales. Tambien es posible que su estrategia de "
         "comunicacion fuera deliberadamente de bajo perfil. En cualquier caso, el contraste con sus "
-        "sucesores es asombroso: Hugo Beras genero 201 articulos con su nombre en un periodo mas corto.", st["body"]))
+        "sucesores es asombroso: Hugo Beras genero 201 articulos con su nombre en un periodo mas corto. "
+        "La diferencia entre ser invisible y ser portada no es el cargo — es el conflicto.", st["body"]))
 
     story.append(PageBreak())
 
