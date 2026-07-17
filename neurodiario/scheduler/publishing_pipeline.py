@@ -1,7 +1,7 @@
 """
 Pipeline de Publicación Automática - NeuroDiario Fase 1
 
-Toma artículos procesados de la BD, los envía a Claude para reescritura,
+Toma artículos procesados de la BD, los envía a OpenAI para reescritura,
 y los publica automáticamente en WordPress citando las fuentes.
 
 Incluye:
@@ -37,8 +37,8 @@ class PublishingPipeline:
         if self._generator is None:
             from neurodiario.generator.article_generator import ArticleGenerator
             self._generator = ArticleGenerator(
-                api_key=self.settings.CLAUDE_API_KEY,
-                model=self.settings.CLAUDE_MODEL,
+                api_key=self.settings.OPENAI_API_KEY,
+                model=self.settings.OPENAI_MODEL,
             )
         return self._generator
 
@@ -230,7 +230,7 @@ class PublishingPipeline:
                     logger.warning(f"  ⚠ No se pudo reservar artículo {article['id']} — saltando")
                     continue
 
-                logger.info("  → Generando con Claude AI...")
+                logger.info("  → Generando con OpenAI...")
                 generated = self.generator.generate_from_single_article(
                     title=article['title'],
                     content=article['content'],

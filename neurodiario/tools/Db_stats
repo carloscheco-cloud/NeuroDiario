@@ -62,7 +62,7 @@ def run_stats():
 
         # ── 2. ARTÍCULOS GENERADOS (GeneratedArticle) ──
         total_gen = db.query(GeneratedArticle).count()
-        print("\n┌─ ARTÍCULOS GENERADOS (por Claude) ───────────────────────")
+        print("\n┌─ ARTÍCULOS GENERADOS (por OpenAI) ───────────────────────")
         print(f"│  Total generados:            {total_gen}")
 
         # Desglose por estado

@@ -51,11 +51,11 @@ class NLPPipeline:
             from neurodiario.nlp.classifier import ArticleClassifier
             from neurodiario.config.settings import settings
             # Híbrido: usa la categoría de la fuente cuando es confiable,
-            # y Claude Haiku cuando la fuente es genérica/dudosa.
+            # y OpenAI cuando la fuente es genérica/dudosa.
             self._classifier = ArticleClassifier(
                 method="hybrid",
-                api_key=getattr(settings, "CLAUDE_API_KEY", None),
-                model=getattr(settings, "CLAUDE_MODEL", None),
+                api_key=getattr(settings, "OPENAI_API_KEY", None),
+                model=getattr(settings, "OPENAI_MODEL", None),
             )
         return self._classifier
 

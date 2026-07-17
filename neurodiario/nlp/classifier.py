@@ -6,7 +6,7 @@ Estrategia (Opción 1 + corrección):
   1. Si la fuente declara una categoría ESPECÍFICA y confiable
      (deportes, economia, salud...), se usa directamente — gratis.
   2. Si la fuente es genérica (general/portada) o dudosa, se consulta
-     a Claude Haiku para clasificar con precisión.
+     a OpenAI para clasificar con precisión.
   3. Si Haiku no está disponible (sin API key o error), cae al método
      de palabras clave como respaldo.
 
@@ -100,14 +100,14 @@ class ArticleClassifier:
 
     def __init__(self, method: str = "hybrid", api_key: Optional[str] = None, model: Optional[str] = None):
         self.method = method
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
-        self.model = model or os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self._client = None
 
     def _get_client(self):
         if self._client is None and self.api_key:
-            import anthropic
-            self._client = anthropic.Anthropic(api_key=self.api_key)
+            from openai import OpenAI
+            self._client = OpenAI(api_key=self.api_key)
         return self._client
 
     def classify(self, text: str, title: str = "", source_category: Optional[str] = None) -> Tuple[str, float]:
@@ -147,7 +147,7 @@ class ArticleClassifier:
         return articles
 
     def _classify_with_haiku(self, title: str, text: str) -> Optional[str]:
-        """Clasifica con Claude Haiku. Devuelve la categoría o None si falla."""
+        """Clasifica con OpenAI. Devuelve la categoría o None si falla."""
         try:
             client = self._get_client()
             if not client:
@@ -166,12 +166,13 @@ Extracto: {fragmento}
 
 Responde SOLO con el nombre exacto de la categoría, en minúsculas, sin explicación."""
 
-            message = client.messages.create(
+            response = client.chat.completions.create(
                 model=self.model,
                 max_tokens=10,
+                temperature=0,
                 messages=[{"role": "user", "content": prompt}],
             )
-            respuesta = message.content[0].text.strip().lower()
+            respuesta = (response.choices[0].message.content or "").strip().lower()
 
             # Validar que sea una categoría real
             for cat in CATEGORIAS_VALIDAS:

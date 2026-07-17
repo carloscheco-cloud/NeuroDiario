@@ -134,7 +134,7 @@ def procesar(publicar: bool = False):
         return 0
 
     # 2. Publicar de verdad
-    generator = ArticleGenerator(api_key=settings.CLAUDE_API_KEY, model=settings.CLAUDE_MODEL)
+    generator = ArticleGenerator(api_key=settings.OPENAI_API_KEY, model=settings.OPENAI_MODEL)
     from neurodiario.publisher.wordpress_publisher import WordPressPublisher
     publisher = WordPressPublisher(
         url=settings.WORDPRESS_URL,

@@ -46,11 +46,11 @@ import requests
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
-import anthropic
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_MODEL = "gpt-4o-mini"
 
 MESES_ES = {
     1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
@@ -480,7 +480,7 @@ class PexelsClient:
 # GENERADOR PRINCIPAL
 # ─────────────────────────────────────────────
 class ArticleGenerator:
-    """Genera articulos periodisticos usando Claude + Serper Images + imagenes de marca como fallback."""
+    """Genera articulos periodisticos usando OpenAI + Serper Images + imagenes de marca como fallback."""
 
     def __init__(
         self,
@@ -492,7 +492,7 @@ class ArticleGenerator:
         google_cse_id: Optional[str] = None,
     ):
         self.model = model
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = OpenAI(api_key=api_key)
         self.serper = SerperImageClient(api_key=serper_api_key)
         self.pexels = PexelsClient(api_key=pexels_api_key)
         self.brand_images = BrandedImageLibrary()
@@ -784,15 +784,18 @@ Extension: 400-600 palabras. Devuelve SOLO HTML. Sin <h1>."""
 
     def _call_api(self, user_prompt: str, max_tokens: int = 2048) -> str:
         try:
-            message = self.client.messages.create(
+            response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=max_tokens,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
+                temperature=0.4,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
             )
-            return message.content[0].text
-        except anthropic.APIError as e:
-            logger.error(f"Error en Claude API: {e}")
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            logger.error(f"Error en OpenAI API: {e}")
             raise
 
     def _clean_html(self, html: str) -> str:

@@ -163,7 +163,7 @@ class Pipeline:
             articles = self.run_nlp(articles)
             detector = TrendDetector()
             trends = detector.detect(articles)
-            generator = ArticleGenerator(api_key=self.config.CLAUDE_API_KEY)
+            generator = ArticleGenerator(api_key=self.config.OPENAI_API_KEY, model=self.config.OPENAI_MODEL)
             digest = generator.generate_digest(trends)
 
             publisher = WordPressPublisher(

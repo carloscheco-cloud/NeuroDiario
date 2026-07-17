@@ -93,7 +93,7 @@ class Trend(Base):
 
 
 class GeneratedArticle(Base):
-    """Representa un artículo generado por Claude AI y publicado en WordPress."""
+    """Representa un artículo generado por IA y publicado en WordPress."""
 
     __tablename__ = "generated_articles"
 
@@ -119,7 +119,7 @@ class GeneratedArticle(Base):
     telegram_posted_at = Column(DateTime, nullable=True)
 
     # Metadatos del modelo usado
-    model_used = Column(String(100), default="claude-opus-4-6")
+    model_used = Column(String(100), default="gpt-4o-mini")
     prompt_tokens = Column(Integer, default=0)
     completion_tokens = Column(Integer, default=0)
 

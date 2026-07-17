@@ -1,0 +1,15 @@
+services:
+  neurodiario:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neurodiario_app
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - neurodiario_net
+
+networks:
+  neurodiario_net:
+    external: true

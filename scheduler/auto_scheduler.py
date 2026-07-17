@@ -115,8 +115,12 @@ def _job_social_sync():
 
         with get_db() as db:
             pending = db.query(GeneratedArticle).filter(
-                GeneratedArticle.status == "published",
+                GeneratedArticle.status.in_(["published", "draft"]),
                 GeneratedArticle.wordpress_post_id != None,   # noqa
+            ).order_by(
+                GeneratedArticle.published_at.asc().nulls_last(),
+                GeneratedArticle.created_at.asc().nulls_last(),
+                GeneratedArticle.id.asc(),
             ).all()
 
             pending = [
@@ -144,6 +148,11 @@ def _job_social_sync():
                 if wp_post.get("status", "") != "publish":
                     logger.info(f"  WP post {record.wordpress_post_id} aún no está publicado — esperando.")
                     return
+
+                if record.status != "published":
+                    record.status = "published"
+                    record.published_at = record.published_at or datetime.utcnow()
+                    logger.info(f"  ✓ BD sincronizada: WP post {record.wordpress_post_id} marcado como published")
 
                 logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
 

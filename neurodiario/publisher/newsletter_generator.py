@@ -56,11 +56,12 @@ def get_top_articles_of_week(db, limit: int = 5) -> List[Dict]:
 
 
 def generate_editorial_summary(articles: List[Dict], youtube_url: str = "") -> str:
-    """Usa Claude para generar el resumen editorial de la semana."""
-    import anthropic
+    """Usa OpenAI para generar el resumen editorial de la semana."""
+    from openai import OpenAI
 
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    client = anthropic.Anthropic(api_key=api_key)
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    client = OpenAI(api_key=api_key)
 
     articles_text = "\n".join([
         f"- [{a['category'].upper()}] {a['title']}"
@@ -84,12 +85,12 @@ INSTRUCCIONES:
 - NO uses markdown, usa HTML simple: <p>, <strong>, <br>
 - Máximo 500 palabras en total"""
 
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    return response.choices[0].message.content or ""
 
 
 def generate_weekly_pdf(articles: List[Dict], week_label: str) -> Optional[str]:
