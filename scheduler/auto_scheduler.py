@@ -158,17 +158,19 @@ def _job_social_sync():
 
                 image_candidates = []
                 db_image_url = None
+
+                wp_image_url = _get_wordpress_image_url(wp_base, auth, record.wordpress_post_id)
+                if wp_image_url:
+                    image_candidates.append(wp_image_url)
+
                 if record.source_article_id:
                     source = db.query(Article).filter(
                         Article.id == record.source_article_id
                     ).first()
                     if source and source.image_url:
                         db_image_url = source.image_url
-                        image_candidates.append(db_image_url)
-
-                wp_image_url = _get_wordpress_image_url(wp_base, auth, record.wordpress_post_id)
-                if wp_image_url and wp_image_url not in image_candidates:
-                    image_candidates.append(wp_image_url)
+                        if source.image_url not in image_candidates:
+                            image_candidates.append(source.image_url)
 
                 if not image_candidates:
                     logger.info("  🖼 Sin imagen en BD ni WordPress — se usará fallback con marca")

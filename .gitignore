@@ -64,3 +64,8 @@ logs/
 # Temporales
 tmp/
 temp/
+
+# Backups locales y archivos sensibles
+.env.backup*
+backups/
+*.sql
