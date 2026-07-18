@@ -135,26 +135,66 @@ def _job_social_sync():
 
             logger.info(f"  Social sync: {len(pending)} artículo(s) en cola — procesando 1 ahora...")
 
-            # ── CAMBIO CLAVE: solo procesamos el primero de la lista ──
-            record = pending[0]
+            # Buscar el primer artículo pendiente que realmente esté publicado.
+            # Los borradores, eliminados o inaccesibles no bloquean la cola.
+            record = None
+            wp_post = None
+
+            for candidate in pending:
+                wp_url = f"{wp_base}/wp-json/wp/v2/posts/{candidate.wordpress_post_id}"
+
+                try:
+                    response = requests.get(wp_url, auth=auth, timeout=10)
+                except requests.RequestException as e:
+                    logger.warning(
+                        f"  WP post {candidate.wordpress_post_id}: "
+                        f"error consultando WordPress — {e}. Saltando."
+                    )
+                    continue
+
+                if response.status_code != 200:
+                    logger.warning(
+                        f"  WP post {candidate.wordpress_post_id}: "
+                        f"HTTP {response.status_code}. Saltando."
+                    )
+                    continue
+
+                candidate_wp_post = response.json()
+                wp_status = candidate_wp_post.get("status", "")
+
+                if wp_status != "publish":
+                    logger.info(
+                        f"  WP post {candidate.wordpress_post_id} tiene estado "
+                        f"'{wp_status}' — saltando."
+                    )
+                    continue
+
+                record = candidate
+                wp_post = candidate_wp_post
+                break
+
+            if record is None:
+                logger.info(
+                    "  Social sync: no se encontró ningún artículo pendiente "
+                    "publicado actualmente en WordPress."
+                )
+                return
 
             try:
-                wp_url = f"{wp_base}/wp-json/wp/v2/posts/{record.wordpress_post_id}"
-                response = requests.get(wp_url, auth=auth, timeout=10)
-                if response.status_code != 200:
-                    logger.warning(f"  No se pudo obtener WP post {record.wordpress_post_id}")
-                    return
-                wp_post = response.json()
-                if wp_post.get("status", "") != "publish":
-                    logger.info(f"  WP post {record.wordpress_post_id} aún no está publicado — esperando.")
-                    return
-
                 if record.status != "published":
                     record.status = "published"
-                    record.published_at = record.published_at or datetime.utcnow()
-                    logger.info(f"  ✓ BD sincronizada: WP post {record.wordpress_post_id} marcado como published")
+                    record.published_at = (
+                        record.published_at or datetime.utcnow()
+                    )
+                    logger.info(
+                        f"  ✓ BD sincronizada: WP post "
+                        f"{record.wordpress_post_id} marcado como published"
+                    )
 
-                logger.info(f"  ✓ WP post {record.wordpress_post_id} publicado — distribuyendo...")
+                logger.info(
+                    f"  ✓ WP post {record.wordpress_post_id} "
+                    "publicado — distribuyendo..."
+                )
 
                 image_candidates = []
                 db_image_url = None
