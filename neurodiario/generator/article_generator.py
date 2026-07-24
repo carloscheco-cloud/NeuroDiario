@@ -162,10 +162,95 @@ def _normalizar_texto(texto: str) -> str:
     return "".join(c for c in texto if unicodedata.category(c) != "Mn")
 
 
-def es_nota_luctuosa(titulo: str) -> bool:
-    """True si el titular corresponde a una nota de fallecimiento."""
-    normalizado = _normalizar_texto(titulo or "")
-    return any(kw in normalizado for kw in LUCTUOSA_KEYWORDS)
+# Contextos donde existe una muerte, pero NO corresponde usar la imagen
+# institucional de luto de NeuroDiario.
+VIOLENT_DEATH_KEYWORDS = [
+    "asesinato", "asesinado", "asesinada", "asesinan",
+    "ultimado", "ultimada", "ultiman",
+    "acribillado", "acribillada", "acribillan",
+    "tiroteo", "balacera", "disparos", "disparo",
+    "enfrentamiento", "intercambio de disparos",
+    "delincuente", "delincuentes", "antisocial",
+    "atraco", "atracador", "atracadores",
+    "sicario", "sicarios", "ejecutado", "ejecutada",
+    "cadaver", "cuerpo sin vida",
+    "violencia de genero", "feminicidio", "homicidio",
+    "policia mata", "agente mata", "abatido", "abatida",
+]
+
+# Cargos, profesiones o descripciones que indican relevancia pública o social.
+PUBLIC_FIGURE_HINTS = [
+    "presidente", "expresidente", "vicepresidente",
+    "senador", "senadora", "diputado", "diputada",
+    "alcalde", "alcaldesa", "regidor", "regidora",
+    "ministro", "ministra", "viceministro", "viceministra",
+    "director", "directora", "funcionario", "funcionaria",
+    "politico", "politica", "dirigente",
+    "artista", "cantante", "musico", "compositor",
+    "actor", "actriz", "comediante", "comunicador",
+    "periodista", "locutor", "productor",
+    "escritor", "escritora", "poeta",
+    "empresario", "empresaria",
+    "deportista", "pelotero", "atleta", "entrenador",
+    "medico", "doctora", "cientifico", "academico",
+    "obispo", "sacerdote", "pastor",
+    "figura publica", "lider comunitario", "personalidad",
+    "premio nacional", "miembro fundador",
+]
+
+GENERIC_DEATH_SUBJECTS = [
+    "un hombre", "una mujer", "un joven", "una joven",
+    "un menor", "una menor", "un adolescente",
+    "una persona", "dos personas", "varias personas",
+    "un delincuente", "un antisocial", "un agente",
+    "un policia", "un motorista", "un conductor",
+]
+
+
+def _titulo_contiene_nombre_propio(titulo: str) -> bool:
+    """
+    Detecta secuencias de al menos dos palabras con inicial mayuscula,
+    como 'Johnny Ventura', 'Rubby Perez' o 'Jose Francisco Pena Gomez'.
+    """
+    patron = r"\b[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+(?:de|del|la|las|los|y))?\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+"
+    return bool(re.search(patron, titulo or ""))
+
+
+def es_nota_luctuosa(titulo: str, contenido: str = "") -> bool:
+    """
+    Usa la imagen institucional de luto solamente cuando la noticia comunica
+    el fallecimiento de una persona identificada o de relevancia pública.
+
+    No se activa para asesinatos, tiroteos, delincuencia, enfrentamientos
+    policiales ni muertes descritas de forma genérica.
+    """
+    titulo_original = titulo or ""
+    titulo_normalizado = _normalizar_texto(titulo_original)
+    contexto_normalizado = _normalizar_texto(
+        f"{titulo_original} {contenido or ''}"
+    )
+
+    tiene_palabra_luctuosa = any(
+        kw in titulo_normalizado for kw in LUCTUOSA_KEYWORDS
+    )
+    if not tiene_palabra_luctuosa:
+        return False
+
+    # Una muerte violenta o delictiva nunca utiliza automáticamente
+    # la plantilla institucional "En Memoria".
+    if any(kw in titulo_normalizado for kw in VIOLENT_DEATH_KEYWORDS):
+        return False
+
+    # Evitar titulares genéricos como "Muere un hombre..."
+    if any(sujeto in titulo_normalizado for sujeto in GENERIC_DEATH_SUBJECTS):
+        return False
+
+    tiene_relevancia_publica = any(
+        hint in contexto_normalizado for hint in PUBLIC_FIGURE_HINTS
+    )
+    tiene_nombre_identificado = _titulo_contiene_nombre_propio(titulo_original)
+
+    return tiene_relevancia_publica or tiene_nombre_identificado
 
 
 class BrandedImageLibrary:
@@ -580,10 +665,36 @@ class ArticleGenerator:
             logger.info(f"  ✓ {len(dom_images)} imagen(es) oficial(es) encontrada(s)")
 
         if tiene_persona:
-            # ── CASO 3: Persona → oficiales o generica de marca. Nada mas. ──
+            # ── CASO 3: Persona ──
+            # Primero fuentes oficiales. Si no hay resultados, se intenta
+            # Google Images general, excluyendo medios locales y dominios
+            # bloqueados. La imagen de marca queda como ultimo recurso.
             if not candidates:
-                logger.info("  Persona detectada SIN imagen oficial → usando imagen generica de NeuroDiario.")
-                logger.info("  (Google general y Pexels omitidos: riesgo de foto de persona equivocada.)")
+                logger.info("  Persona detectada SIN imagen oficial → buscando en Google general filtrado...")
+                gen_images = self.serper.search_images(
+                    query,
+                    limit=5,
+                    exclude_sites=EXCLUDED_SITES_QUERY,
+                )
+                for img in gen_images:
+                    _add(img.get("url", ""))
+                    if not first_html:
+                        first_html = self.serper.build_image_html(
+                            img,
+                            caption=caption,
+                        )
+
+                if gen_images:
+                    logger.info(
+                        f"  ✓ {len(gen_images)} imagen(es) de persona "
+                        "encontrada(s) en Google general filtrado"
+                    )
+
+            if not candidates:
+                logger.info(
+                    "  Persona detectada SIN imagen valida → "
+                    "usando imagen generica de NeuroDiario."
+                )
                 img = self.brand_images.get_generic()
                 _add(img["url"])
                 first_html = self._branded_image_html(img, caption=caption)
@@ -672,7 +783,7 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._clean_html(article_html)
             article_html = self._remove_h1_from_html(article_html)
 
-            luctuosa = es_nota_luctuosa(title)
+            luctuosa = es_nota_luctuosa(title, content)
             image_query, tiene_persona, es_abstracto = self._build_image_query(title, category)
             image_candidates, image_html, brand_media_id = self._collect_image_candidates(
                 image_query,
@@ -737,7 +848,7 @@ IMPORTANTE: Devuelve SOLO el cuerpo en HTML. El primer elemento debe ser un <p>,
             article_html = self._clean_html(article_html)
             article_html = self._remove_h1_from_html(article_html)
 
-            luctuosa = es_nota_luctuosa(topic)
+            luctuosa = es_nota_luctuosa(topic, sources_text)
             image_query, tiene_persona, es_abstracto = self._build_image_query(topic, category)
             image_candidates, image_html, brand_media_id = self._collect_image_candidates(
                 image_query,

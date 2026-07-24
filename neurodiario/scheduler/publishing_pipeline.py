@@ -242,14 +242,34 @@ class PublishingPipeline:
                 )
                 logger.info(f"  ✓ Generado: {generated['title'][:60]}")
 
+                # Prioridad de imágenes:
+                # 1. Imagen original obtenida del RSS
+                # 2. Imágenes encontradas por el generador
+                # 3. Imagen genérica de NeuroDiario
+                image_candidates = []
+
+                source_image_url = article.get("image_url")
+                generated_candidates = generated.get("image_candidates") or []
+
+                for candidate in [source_image_url, *generated_candidates]:
+                    if candidate and candidate not in image_candidates:
+                        image_candidates.append(candidate)
+
                 wp_article = {
                     "title": generated['title'],
                     "content": generated['content'],
                     "categories": [generated['category'].title()],
                     "tags": generated.get('tags', []),
                     "status": "draft",
-                    "image_url": generated.get('image_url'),
+                    "image_url": image_candidates[0] if image_candidates else None,
+                    "image_candidates": image_candidates,
+                    "image_media_id": generated.get("image_media_id"),
                 }
+
+                logger.info("  → Diagnóstico de imagen para WordPress")
+                logger.info(f"    image_url generada: {generated.get('image_url')!r}")
+                logger.info(f"    image_candidates: {generated.get('image_candidates')!r}")
+                logger.info(f"    image_media_id: {generated.get('image_media_id')!r}")
 
                 logger.info("  → Publicando en WordPress...")
                 post_id = self.publisher.publish(wp_article)

@@ -93,11 +93,53 @@ class WordPressPublisher:
                 logger.info(f"Procesando tags: {article['tags']}")
                 tag_ids = self._get_or_create_tags(article['tags'])
 
-            # Subir imagen destacada si existe  ← NUEVO
-            featured_media_id = None
-            if article.get('image_url'):
-                logger.info(f"  → Subiendo imagen destacada...")
-                featured_media_id = self._upload_image(article['image_url'], article['title'])
+            # Asignar o subir imagen destacada.
+            # Si ya existe en la mediateca, reutilizamos su ID.
+            featured_media_id = article.get("image_media_id")
+
+            if featured_media_id:
+                logger.info(
+                    f"  ✓ Reutilizando imagen existente de WordPress "
+                    f"— Media ID: {featured_media_id}"
+                )
+            else:
+                image_candidates = article.get("image_candidates") or []
+
+                if article.get("image_url"):
+                    image_candidates = [
+                        article["image_url"],
+                        *image_candidates,
+                    ]
+
+                # Eliminar vacíos y duplicados conservando el orden.
+                unique_candidates = []
+                for candidate in image_candidates:
+                    if candidate and candidate not in unique_candidates:
+                        unique_candidates.append(candidate)
+
+                for position, image_url in enumerate(unique_candidates, 1):
+                    logger.info(
+                        f"  → Probando imagen destacada "
+                        f"{position}/{len(unique_candidates)}: "
+                        f"{image_url[:120]}"
+                    )
+
+                    featured_media_id = self._upload_image(
+                        image_url,
+                        article["title"],
+                    )
+
+                    if featured_media_id:
+                        logger.info(
+                            f"  ✓ Imagen candidata {position} aceptada "
+                            f"— Media ID: {featured_media_id}"
+                        )
+                        break
+
+                if unique_candidates and not featured_media_id:
+                    logger.warning(
+                        "  ⚠ Ninguna imagen candidata pudo subirse a WordPress."
+                    )
 
             post_data = {
                 'title': article['title'],
