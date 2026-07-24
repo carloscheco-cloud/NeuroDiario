@@ -166,13 +166,63 @@ def procesar(publicar: bool = False):
             generated = generator.create_article(trend, articles_para_gen)
 
             # Publicar en WordPress como publish (no draft)
+            image_url = generated.get("image_url")
+            image_candidates = []
+            if image_url:
+                image_candidates.append(image_url)
+
+            # Media Engine para clustering: usa imagen aprobada si el flag está activo.
+            if getattr(settings, "MEDIA_ENGINE_USE_FEATURED", False):
+                try:
+                    from neurodiario.media.selector import select_featured_image
+
+                    media_asset = select_featured_image(
+                        entity_name=None,
+                        topic=categoria,
+                        mark_used=True,
+                    )
+
+                    if media_asset:
+                        media_url = media_asset.get("wordpress_url") or media_asset.get("source_url")
+                        media_id = media_asset.get("wordpress_media_id")
+
+                        if media_id:
+                            generated["image_media_id"] = media_id
+                            image_url = None
+                            logger.info(
+                                "  🧠 Media Engine activo: usando WP media_id "
+                                f"{media_id} para categoría {categoria}"
+                            )
+                        elif media_url:
+                            image_url = media_url
+                            image_candidates = [
+                                media_url,
+                                *[c for c in image_candidates if c != media_url],
+                            ]
+                            logger.info(
+                                "  🧠 Media Engine activo: usando URL aprobada "
+                                f"id={media_asset.get('id')} categoría={categoria}"
+                            )
+                    else:
+                        logger.info(
+                            f"  🧠 Media Engine activo: sin imagen aprobada para {categoria}"
+                        )
+                except Exception as media_error:
+                    logger.warning(
+                        f"  ⚠ Media Engine falló; se conserva imagen normal: {media_error}"
+                    )
+            else:
+                logger.info("  🧠 Media Engine activo: OFF")
+
             wp_article = {
                 "title": generated["title"],
                 "content": generated["content"],
                 "categories": [categoria.title()],
                 "tags": generated.get("tags", []),
                 "status": "publish",
-                "image_url": generated.get("image_url"),
+                "image_url": image_url,
+                "image_candidates": image_candidates,
+                "image_media_id": generated.get("image_media_id"),
             }
             post_id = publisher.publish(wp_article)
 
