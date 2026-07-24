@@ -266,6 +266,31 @@ class PublishingPipeline:
                     "image_media_id": generated.get("image_media_id"),
                 }
 
+                # Media Engine diagnostic: solo consulta, NO cambia publicación todavía.
+                try:
+                    from neurodiario.media.selector import select_featured_image
+
+                    media_engine_match = select_featured_image(
+                        entity_name=None,
+                        topic=generated.get("category"),
+                        mark_used=False,
+                    )
+
+                    if media_engine_match:
+                        logger.info(
+                            "  🧠 Media Engine: imagen aprobada encontrada "
+                            f"id={media_engine_match.get('id')} "
+                            f"topic={media_engine_match.get('topic')} "
+                            f"provider={media_engine_match.get('source_provider')}"
+                        )
+                    else:
+                        logger.info("  🧠 Media Engine: sin imagen aprobada para este tema")
+                except Exception as media_engine_error:
+                    logger.warning(
+                        f"  ⚠ Media Engine diagnostic falló sin afectar publicación: "
+                        f"{media_engine_error}"
+                    )
+
                 logger.info("  → Diagnóstico de imagen para WordPress")
                 logger.info(f"    image_url generada: {generated.get('image_url')!r}")
                 logger.info(f"    image_candidates: {generated.get('image_candidates')!r}")
