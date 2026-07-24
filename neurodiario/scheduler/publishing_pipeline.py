@@ -296,6 +296,52 @@ class PublishingPipeline:
                 logger.info(f"    image_candidates: {generated.get('image_candidates')!r}")
                 logger.info(f"    image_media_id: {generated.get('image_media_id')!r}")
 
+                # Media Engine active mode: solo reemplaza imagen si el flag está activo.
+                if getattr(self.settings, "MEDIA_ENGINE_USE_FEATURED", False):
+                    try:
+                        from neurodiario.media.selector import select_featured_image
+
+                        media_engine_asset = select_featured_image(
+                            entity_name=None,
+                            topic=generated.get("category"),
+                            mark_used=True,
+                        )
+
+                        if media_engine_asset:
+                            media_engine_url = (
+                                media_engine_asset.get("wordpress_url")
+                                or media_engine_asset.get("source_url")
+                            )
+                            media_engine_media_id = media_engine_asset.get("wordpress_media_id")
+
+                            if media_engine_media_id:
+                                wp_article["image_media_id"] = media_engine_media_id
+                                wp_article["image_url"] = None
+                                logger.info(
+                                    "  🧠 Media Engine activo: usando WP media_id "
+                                    f"{media_engine_media_id}"
+                                )
+                            elif media_engine_url:
+                                wp_article["image_url"] = media_engine_url
+                                wp_article["image_candidates"] = [
+                                    media_engine_url,
+                                    *[
+                                        c for c in wp_article.get("image_candidates", [])
+                                        if c != media_engine_url
+                                    ],
+                                ]
+                                logger.info(
+                                    "  🧠 Media Engine activo: usando URL aprobada "
+                                    f"id={media_engine_asset.get('id')}"
+                                )
+                    except Exception as media_engine_active_error:
+                        logger.warning(
+                            f"  ⚠ Media Engine activo falló; se conserva flujo normal: "
+                            f"{media_engine_active_error}"
+                        )
+                else:
+                    logger.info("  🧠 Media Engine activo: OFF")
+
                 logger.info("  → Publicando en WordPress...")
                 post_id = self.publisher.publish(wp_article)
 

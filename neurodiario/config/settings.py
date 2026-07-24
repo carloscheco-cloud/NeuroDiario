@@ -43,6 +43,13 @@ class Settings:
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
     PEXELS_API_KEY: str = os.getenv("PEXELS_API_KEY", "")
 
+    # -- Media Intelligence Engine -------------------------------------------
+    # Apagado por defecto: primero diagnóstico, luego activación controlada.
+    MEDIA_ENGINE_USE_FEATURED: bool = os.getenv(
+        "MEDIA_ENGINE_USE_FEATURED",
+        "False",
+    ).lower() in ("true", "1", "yes")
+
     # -- Aplicacion -----------------------------------------------------------
     DEBUG: bool = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
