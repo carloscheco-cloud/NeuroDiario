@@ -128,3 +128,56 @@ class GeneratedArticle(Base):
 
     def __repr__(self):
         return f"<GeneratedArticle(id={self.id}, status='{self.status}', type='{self.article_type}')>"
+
+class MediaAsset(Base):
+    """
+    Representa un recurso multimedia reutilizable de NeuroDiario:
+    fotos, caricaturas, ilustraciones e imágenes subidas a WordPress.
+    """
+
+    __tablename__ = "media_assets"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Entidad o tema asociado
+    entity_name = Column(String(250), nullable=True, index=True)
+    entity_type = Column(String(100), nullable=True, index=True)
+    topic = Column(String(300), nullable=True, index=True)
+    context = Column(Text, nullable=True)
+
+    # Tipo de recurso
+    media_type = Column(String(50), default="image", index=True)
+    usage_type = Column(String(100), nullable=True, index=True)
+
+    # Origen del recurso
+    source_provider = Column(String(100), nullable=True, index=True)
+    source_url = Column(String(1000), nullable=True)
+    local_path = Column(String(1000), nullable=True)
+
+    # WordPress Media Library
+    wordpress_media_id = Column(Integer, nullable=True, index=True)
+    wordpress_url = Column(String(1000), nullable=True)
+
+    # Control editorial
+    priority = Column(Integer, default=50, index=True)
+    quality_score = Column(Float, default=0.0)
+    is_active = Column(Boolean, default=True, index=True)
+    is_approved = Column(Boolean, default=False, index=True)
+    notes = Column(Text, nullable=True)
+
+    # Uso
+    usage_count = Column(Integer, default=0)
+    last_used_at = Column(DateTime, nullable=True)
+
+    # Metadata flexible
+    extra_metadata = Column(JSON, default=dict)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return (
+            f"<MediaAsset(id={self.id}, entity='{self.entity_name}', "
+            f"type='{self.media_type}', wp_id={self.wordpress_media_id})>"
+        )
+
