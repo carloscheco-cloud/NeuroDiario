@@ -1,0 +1,73 @@
+{
+  "study": {
+    "slug": "goldquest-proyecto-romero",
+    "client": "GoldQuest",
+    "title": "Proyecto Romero: conversación pública y narrativa en República Dominicana",
+    "target": "GoldQuest y Proyecto Romero",
+    "country": "República Dominicana",
+    "period_start": "2015-01-01",
+    "period_end": "2026-08-13"
+  },
+  "search_terms": [
+    "GoldQuest",
+    "Gold Quest",
+    "Proyecto Romero",
+    "mina San Juan",
+    "minería San Juan",
+    "oro San Juan"
+  ],
+  "narratives": [
+    "agua y seguridad hídrica",
+    "agricultura y producción local",
+    "medio ambiente y contaminación",
+    "empleo y desarrollo económico",
+    "inversión y seguridad jurídica",
+    "confianza institucional",
+    "participación comunitaria",
+    "oposición y movilización social"
+  ],
+  "actors": [
+    "GoldQuest",
+    "Gobierno dominicano",
+    "Ministerio de Medio Ambiente",
+    "Ministerio de Energía y Minas",
+    "comunidades de San Juan",
+    "agricultores",
+    "organizaciones ambientales",
+    "sector empresarial",
+    "Iglesia",
+    "comunicadores y periodistas"
+  ],
+  "questions": [
+    "¿Qué narrativas dominan la conversación pública sobre GoldQuest y Proyecto Romero?",
+    "¿Qué actores impulsan o amplifican cada narrativa?",
+    "¿Cómo cambia la postura entre medios y comentarios ciudadanos?",
+    "¿Qué claims aparecen repetidamente y requieren verificación?",
+    "¿Qué eventos cambian el volumen o tono de la conversación?"
+  ],
+  "sources": {
+    "media": {
+      "enabled": true,
+      "window_months": 6,
+      "max_queries": 300,
+      "results_per_query": 10
+    },
+    "youtube": {
+      "enabled": true,
+      "max_videos": 25,
+      "comments_per_video": 100
+    },
+    "social_import": {
+      "enabled": true,
+      "platforms": ["facebook", "instagram", "tiktok", "x"]
+    },
+    "radio": {
+      "enabled": false,
+      "note": "Reservado para v2: detección de relevancia en audio y transcripción selectiva con fuentes autorizadas."
+    }
+  },
+  "report": {
+    "executive_pages_target": "10-14",
+    "premium_pages_target": "35-60"
+  }
+}
