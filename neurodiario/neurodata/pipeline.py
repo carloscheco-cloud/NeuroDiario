@@ -6,6 +6,7 @@ from typing import List
 from .analyzer import NarrativeAnalyzer
 from .collectors import ArticleTextEnricher, SerperCollector, YouTubeCollector
 from .config import StudyConfig
+from .quality import audit_records, write_audit
 from .reporting import render_executive, render_premium, summarize, write_report
 from .social_import import import_social_file
 from .storage import merge_records, read_jsonl, study_dir, write_jsonl
@@ -44,6 +45,12 @@ class NeuroDataPipeline:
             "ok": sum(1 for r in media if r.get("enrichment_status") == "ok"),
             "failed": sum(1 for r in media if r.get("enrichment_status") == "failed"),
         }
+
+    def audit(self) -> dict:
+        records = read_jsonl(self.raw_path)
+        audit = audit_records(self.study, records)
+        write_audit(self.directory / "audit.json", audit)
+        return audit
 
     def import_social(self, path: str, platform: str, source_url: str | None = None) -> int:
         rows = import_social_file(path, self.study.slug, platform, source_url)
