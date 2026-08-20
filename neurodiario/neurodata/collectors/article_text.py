@@ -50,7 +50,9 @@ class ArticleTextEnricher:
         return list(dict.fromkeys(candidates))
 
     def _extract(self, html: str) -> str:
-        soup = BeautifulSoup(html, "lxml")
+        # html.parser viene con Python y evita que NeuroData dependa de lxml
+        # en entornos aislados como .venv-neurodata.
+        soup = BeautifulSoup(html, "html.parser")
         for node in soup(["script", "style", "noscript", "svg", "form", "nav", "footer", "aside"]):
             node.decompose()
 
