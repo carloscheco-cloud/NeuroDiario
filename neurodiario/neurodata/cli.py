@@ -16,6 +16,9 @@ def parser() -> argparse.ArgumentParser:
     collect = sub.add_parser("collect")
     collect.add_argument("--sources", default="media,youtube")
 
+    enrich = sub.add_parser("enrich")
+    enrich.add_argument("--limit", type=int)
+
     social = sub.add_parser("import-social")
     social.add_argument("--file", required=True)
     social.add_argument("--platform", required=True)
@@ -38,6 +41,9 @@ def main() -> int:
     elif args.command == "collect":
         count = pipeline.collect([s.strip() for s in args.sources.split(",") if s.strip()])
         print(f"{count} records added")
+    elif args.command == "enrich":
+        stats = pipeline.enrich(args.limit)
+        print(json.dumps(stats, ensure_ascii=False))
     elif args.command == "import-social":
         count = pipeline.import_social(args.file, args.platform, args.source_url)
         print(f"{count} social records added")
