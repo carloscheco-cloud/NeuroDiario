@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 from typing import Dict, Iterable, List
+from urllib.parse import urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -30,8 +31,23 @@ class ArticleTextEnricher:
 
     @staticmethod
     def _clean(text: str) -> str:
-        text = re.sub(r"\s+", " ", text or " ").strip()
-        return text
+        return re.sub(r"\s+", " ", text or " ").strip()
+
+    @staticmethod
+    def _candidate_urls(url: str) -> List[str]:
+        """Devuelve variantes públicas conocidas sin saltar controles de acceso."""
+        candidates = [url]
+        parsed = urlparse(url)
+        host = parsed.netloc.lower().replace("www.", "")
+        path = parsed.path or "/"
+
+        # Diario Libre publica una versión AMP pública de sus artículos.
+        if host == "diariolibre.com" and not path.startswith("/amp/"):
+            amp_path = "/amp" + (path if path.startswith("/") else "/" + path)
+            amp_url = urlunparse((parsed.scheme or "https", parsed.netloc, amp_path, "", parsed.query, ""))
+            candidates.append(amp_url)
+
+        return list(dict.fromkeys(candidates))
 
     def _extract(self, html: str) -> str:
         soup = BeautifulSoup(html, "lxml")
@@ -54,15 +70,15 @@ class ArticleTextEnricher:
                 ".story-body p",
                 ".content-body p",
             ]
-            paragraphs: List[str] = []
             for selector in selectors:
                 nodes = soup.select(selector)
-                if nodes:
-                    paragraphs = [self._clean(n.get_text(" ", strip=True)) for n in nodes]
-                    joined = " ".join(p for p in paragraphs if len(p) >= 30)
-                    if len(joined) >= 500:
-                        text = joined
-                        break
+                if not nodes:
+                    continue
+                paragraphs = [self._clean(n.get_text(" ", strip=True)) for n in nodes]
+                joined = " ".join(p for p in paragraphs if len(p) >= 30)
+                if len(joined) >= 500:
+                    text = joined
+                    break
 
         if len(text) < 500:
             paragraphs = [self._clean(p.get_text(" ", strip=True)) for p in soup.find_all("p")]
@@ -78,27 +94,49 @@ class ArticleTextEnricher:
 
         enriched = dict(record)
         enriched.setdefault("search_snippet", record.get("text", ""))
+        attempts: List[Dict] = []
+
         try:
-            response = self.session.get(record["url"], timeout=self.timeout, allow_redirects=True)
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "")
-            if "html" not in content_type.lower():
-                raise ValueError(f"unsupported content type: {content_type}")
-            text = self._extract(response.text)
-            if len(text) < 300:
-                raise ValueError("article body too short")
-            enriched["text"] = text
-            enriched["full_text_chars"] = len(text)
-            enriched["text_source"] = "public_article_page"
-            enriched["enrichment_status"] = "ok"
+            for candidate_url in self._candidate_urls(record["url"]):
+                attempt = {"url": candidate_url}
+                try:
+                    response = self.session.get(candidate_url, timeout=self.timeout, allow_redirects=True)
+                    attempt.update({
+                        "status_code": response.status_code,
+                        "content_type": response.headers.get("content-type", ""),
+                    })
+                    attempts.append(attempt)
+                    response.raise_for_status()
+                    content_type = response.headers.get("content-type", "")
+                    if "html" not in content_type.lower():
+                        raise ValueError(f"unsupported content type: {content_type}")
+                    text = self._extract(response.text)
+                    if len(text) < 300:
+                        raise ValueError("article body too short")
+
+                    enriched["text"] = text
+                    enriched["full_text_chars"] = len(text)
+                    enriched["text_source"] = "public_article_page"
+                    enriched["enrichment_status"] = "ok"
+                    enriched["enrichment_url"] = candidate_url
+                    enriched["enrichment_attempts"] = attempts
+                    return enriched
+                except Exception as exc:
+                    attempt["error"] = str(exc)[:300]
+                    if not attempts or attempts[-1] is not attempt:
+                        attempts.append(attempt)
+                    continue
+
+            raise RuntimeError("all public article URL candidates failed")
         except Exception as exc:
             enriched["full_text_chars"] = len(enriched.get("text", "") or "")
             enriched["text_source"] = "serper_snippet"
             enriched["enrichment_status"] = "failed"
             enriched["enrichment_error"] = str(exc)[:300]
+            enriched["enrichment_attempts"] = attempts
+            return enriched
         finally:
             time.sleep(self.delay)
-        return enriched
 
     def enrich_many(self, records: Iterable[Dict], limit: int | None = None) -> List[Dict]:
         output: List[Dict] = []

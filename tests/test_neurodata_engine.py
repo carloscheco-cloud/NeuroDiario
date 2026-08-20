@@ -48,6 +48,12 @@ class NeuroDataTests(unittest.TestCase):
         self.assertNotIn("Menu", text)
         self.assertNotIn("Pie de página", text)
 
+    def test_diario_libre_adds_public_amp_candidate(self):
+        url = "https://www.diariolibre.com/actualidad/noticia-demo-AB123"
+        candidates = ArticleTextEnricher._candidate_urls(url)
+        self.assertEqual(candidates[0], url)
+        self.assertIn("https://www.diariolibre.com/amp/actualidad/noticia-demo-AB123", candidates)
+
     def test_summary(self):
         records = [{
             "source_type": "social_comment", "source_name": "facebook",
