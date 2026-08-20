@@ -29,6 +29,9 @@ def parser() -> argparse.ArgumentParser:
     analyze = sub.add_parser("analyze")
     analyze.add_argument("--limit", type=int)
 
+    signal = sub.add_parser("signal-brief")
+    signal.add_argument("--sample-size", type=int, default=80)
+
     report = sub.add_parser("report")
     report.add_argument("--tier", choices=["executive", "premium"], default="executive")
     return p
@@ -63,6 +66,8 @@ def main() -> int:
     elif args.command == "analyze":
         count = pipeline.analyze(args.limit)
         print(f"{count} records analyzed")
+    elif args.command == "signal-brief":
+        print(json.dumps(pipeline.signal_brief(args.sample_size), ensure_ascii=False, indent=2))
     elif args.command == "report":
         print(pipeline.report(args.tier))
     return 0

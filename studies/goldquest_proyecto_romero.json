@@ -68,6 +68,20 @@
   },
   "report": {
     "executive_pages_target": "10-14",
-    "premium_pages_target": "35-60"
+    "premium_pages_target": "35-60",
+    "signal_brief": {
+      "sample_size": 80,
+      "source_quotas": {
+        "Diario Libre": 16,
+        "Listín Diario": 12,
+        "El Nuevo Diario": 12,
+        "El Día": 10,
+        "El Caribe": 8,
+        "Acento": 8,
+        "Hoy": 7,
+        "CDN": 5,
+        "Noticias SIN": 2
+      }
+    }
   }
 }
