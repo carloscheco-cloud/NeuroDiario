@@ -5,6 +5,7 @@ NeuroData convierte una investigación específica en una **configuración**, no
 ## Alcance v1
 
 - Búsqueda de cobertura en medios dominicanos mediante Serper.dev.
+- Enriquecimiento de artículos con el texto público visible de la página antes del análisis narrativo.
 - Búsqueda de videos y comentarios públicos mediante YouTube Data API.
 - Importación de comentarios sociales desde JSON, CSV o TXT/Markdown.
 - Seudonimización de autores importados: NeuroData no necesita conservar el nombre del comentarista para analizar narrativas.
@@ -41,6 +42,24 @@ python -m neurodiario.neurodata.cli \
   --sources media,youtube
 ```
 
+## Enriquecer artículos antes de analizarlos
+
+Serper descubre cobertura usando títulos y snippets. Para un reporte cliente-facing, NeuroData intenta recuperar el cuerpo público visible de cada artículo antes de clasificar narrativas. Si una página bloquea el acceso o no puede extraerse con fiabilidad, se conserva el snippet y se registra el fallo.
+
+```bash
+python -m neurodiario.neurodata.cli \
+  --study studies/goldquest_proyecto_romero.json enrich
+```
+
+Para probar primero una muestra:
+
+```bash
+python -m neurodiario.neurodata.cli \
+  --study studies/goldquest_proyecto_romero.json enrich --limit 10
+```
+
+Los registros enriquecidos conservan `search_snippet` y añaden `text_source`, `full_text_chars` y `enrichment_status` para mantener trazabilidad.
+
 ## Importar comentarios de Facebook u otra red
 
 CSV mínimo:
@@ -62,6 +81,8 @@ python -m neurodiario.neurodata.cli \
 ```
 
 ## Analizar
+
+Ejecutar preferiblemente después del paso `enrich` para que los artículos disponibles se analicen con cuerpo completo y no solo con el snippet de búsqueda.
 
 ```bash
 python -m neurodiario.neurodata.cli \
@@ -100,4 +121,5 @@ El Executive Brief muestra el estado visible de la conversación y sirve como ab
 - “Sentimiento negativo” no equivale a sesgo editorial.
 - Una clasificación de IA debe revisarse antes de conclusiones reputacionales o legales.
 - Claims detectados son afirmaciones para verificar, no hechos confirmados.
+- El enriquecedor de texto trabaja únicamente con páginas públicas; no intenta saltarse autenticación, paywalls ni controles de acceso.
 - Respetar términos de servicio, privacidad, licencias y derechos de cada fuente.
