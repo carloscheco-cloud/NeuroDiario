@@ -35,6 +35,10 @@ coverage.xml
 *.sqlite3
 *.db
 
+# NeuroData datasets y reportes generados
+# La configuración de estudios sí se versiona en /studies.
+data/neurodata/
+
 # macOS
 .DS_Store
 .AppleDouble
