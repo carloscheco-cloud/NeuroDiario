@@ -19,6 +19,8 @@ def parser() -> argparse.ArgumentParser:
     enrich = sub.add_parser("enrich")
     enrich.add_argument("--limit", type=int)
 
+    sub.add_parser("audit")
+
     social = sub.add_parser("import-social")
     social.add_argument("--file", required=True)
     social.add_argument("--platform", required=True)
@@ -44,6 +46,17 @@ def main() -> int:
     elif args.command == "enrich":
         stats = pipeline.enrich(args.limit)
         print(json.dumps(stats, ensure_ascii=False))
+    elif args.command == "audit":
+        audit = pipeline.audit()
+        compact = {
+            "study": audit["study"],
+            "total": audit["total"],
+            "usable": audit["usable"],
+            "review": audit["review"],
+            "by_year": audit["by_year"],
+            "review_records": audit["review_records"],
+        }
+        print(json.dumps(compact, ensure_ascii=False, indent=2))
     elif args.command == "import-social":
         count = pipeline.import_social(args.file, args.platform, args.source_url)
         print(f"{count} social records added")
