@@ -47,7 +47,6 @@ class ArticleTextEnricher:
             amp_url = urlunparse((parsed.scheme or "https", parsed.netloc, amp_path, "", parsed.query, ""))
             candidates.append(amp_url)
 
-        # Preservar orden y eliminar duplicados.
         return list(dict.fromkeys(candidates))
 
     def _extract(self, html: str) -> str:
@@ -99,13 +98,14 @@ class ArticleTextEnricher:
 
         try:
             for candidate_url in self._candidate_urls(record["url"]):
+                attempt = {"url": candidate_url}
                 try:
                     response = self.session.get(candidate_url, timeout=self.timeout, allow_redirects=True)
-                    attempts.append({
-                        "url": candidate_url,
+                    attempt.update({
                         "status_code": response.status_code,
                         "content_type": response.headers.get("content-type", ""),
                     })
+                    attempts.append(attempt)
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "")
                     if "html" not in content_type.lower():
@@ -122,7 +122,9 @@ class ArticleTextEnricher:
                     enriched["enrichment_attempts"] = attempts
                     return enriched
                 except Exception as exc:
-                    attempts[-1]["error"] = str(exc)[:300] if attempts else str(exc)[:300]
+                    attempt["error"] = str(exc)[:300]
+                    if not attempts or attempts[-1] is not attempt:
+                        attempts.append(attempt)
                     continue
 
             raise RuntimeError("all public article URL candidates failed")
