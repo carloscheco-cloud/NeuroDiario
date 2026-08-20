@@ -8,6 +8,7 @@ from .collectors import ArticleTextEnricher, SerperCollector, YouTubeCollector
 from .config import StudyConfig
 from .quality import audit_records, write_audit
 from .reporting import render_executive, render_premium, summarize, write_report
+from .signal_brief import render_signal_brief, select_signal_sample, write_signal_brief
 from .social_import import import_social_file
 from .storage import merge_records, read_jsonl, study_dir, write_jsonl
 
@@ -70,6 +71,12 @@ class NeuroDataPipeline:
             existing[record["id"]] = analyzed
             write_jsonl(self.analyzed_path, existing.values())
         return len(pending)
+
+    def signal_brief(self, sample_size: int = 80) -> dict:
+        records = read_jsonl(self.analyzed_path)
+        sample, metadata = select_signal_sample(self.study, records, sample_size=sample_size)
+        content, data = render_signal_brief(self.study, sample, metadata)
+        return write_signal_brief(self.directory, content, data, sample)
 
     def report(self, tier: str = "executive") -> Path:
         records = read_jsonl(self.analyzed_path)
