@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 
 from neurodiario.neurodata.collectors.article_text import ArticleTextEnricher
-from neurodiario.neurodata.config import load_study
+from neurodiario.neurodata.config import StudyConfig, load_study
+from neurodiario.neurodata.quality import audit_records
 from neurodiario.neurodata.reporting import summarize
 from neurodiario.neurodata.social_import import import_social_file
 
@@ -54,12 +55,33 @@ class NeuroDataTests(unittest.TestCase):
         self.assertEqual(candidates[0], url)
         self.assertIn("https://www.diariolibre.com/amp/actualidad/noticia-demo-AB123", candidates)
 
-    def test_summary(self):
+    def test_audit_marks_non_article_landing_for_review(self):
+        study = StudyConfig(slug="demo", client="GoldQuest", title="Demo", target="GoldQuest", search_terms=["GoldQuest", "Proyecto Romero"])
         records = [{
-            "source_type": "social_comment", "source_name": "facebook",
-            "analysis": {"sentiment": "negativo", "stance": "critico", "narratives": [{"name": "agua", "score": 0.9}], "actors": ["GoldQuest"]}
+            "id": "1", "source_type": "media_article", "source_name": "Hoy",
+            "title": "Noticias del 30 de enero de 2018", "text": "GoldQuest Proyecto Romero",
+            "published_at": "30 ene 2018", "full_text_chars": 25, "enrichment_status": "failed",
         }]
+        audit = audit_records(study, records)
+        self.assertEqual(audit["review"], 1)
+        self.assertIn("non_article_landing", audit["review_records"][0]["flags"])
+        self.assertEqual(audit["by_year"]["2018"], 1)
+
+    def test_summary_excludes_low_relevance(self):
+        records = [
+            {
+                "source_type": "media_article", "source_name": "Medio A",
+                "analysis": {"relevance_score": 0.95, "sentiment": "negativo", "stance": "critico", "narratives": [{"name": "agua", "score": 0.9}], "actors": ["GoldQuest"]},
+            },
+            {
+                "source_type": "media_article", "source_name": "Medio B",
+                "analysis": {"relevance_score": 0.10, "sentiment": "positivo", "stance": "favorable", "narratives": [{"name": "tenis", "score": 0.9}], "actors": ["Otro"]},
+            },
+        ]
         summary = summarize(records)
+        self.assertEqual(summary["analyzed_records"], 2)
+        self.assertEqual(summary["relevant_records"], 1)
+        self.assertEqual(summary["excluded_low_relevance"], 1)
         self.assertEqual(summary["narratives"][0][0], "agua")
         self.assertEqual(summary["actors"][0][0], "GoldQuest")
 

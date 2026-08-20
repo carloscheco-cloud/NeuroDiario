@@ -2,10 +2,56 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from typing import Dict, List, Optional
 
 from .config import StudyConfig
+
+
+_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "relevance_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "sentiment": {"type": "string", "enum": ["positivo", "negativo", "neutral", "mixto"]},
+        "stance": {"type": "string", "enum": ["favorable", "critico", "neutral", "incierto"]},
+        "tone": {
+            "type": "string",
+            "enum": ["informativo", "elogio", "critica", "denuncia", "preocupacion", "sarcasmo", "pregunta", "movilizacion", "otro"],
+        },
+        "narratives": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    "score": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["name", "score"],
+            },
+        },
+        "actors": {"type": "array", "items": {"type": "string"}},
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "claim": {"type": "string"},
+                    "needs_verification": {"type": "boolean"},
+                },
+                "required": ["claim", "needs_verification"],
+            },
+        },
+        "emotions": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string"},
+        "evidence_terms": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "relevance_score", "sentiment", "stance", "tone", "narratives",
+        "actors", "claims", "emotions", "summary", "evidence_terms",
+    ],
+}
 
 
 class NarrativeAnalyzer:
@@ -22,52 +68,47 @@ class NarrativeAnalyzer:
             self._client = OpenAI(api_key=self.api_key)
         return self._client
 
-    @staticmethod
-    def _extract_json(text: str) -> Dict:
-        text = text.strip()
-        text = re.sub(r"^```json\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-        return json.loads(text)
-
     def analyze(self, study: StudyConfig, record: Dict) -> Dict:
-        body = (record.get("text") or "")[:7000]
+        body = (record.get("text") or "")[:12000]
         title = (record.get("title") or "")[:800]
-        system = """Eres NeuroData, un analista de inteligencia mediática y narrativa en República Dominicana.
-Analiza evidencia observable. No inventes hechos ni atribuyas intenciones. Diferencia sentimiento general de postura hacia el objetivo. No infieras género, etnia, edad, religión u otros atributos sensibles. Devuelve SOLO JSON válido."""
-        user = f"""ESTUDIO: {study.title}
+        instructions = (
+            "Eres NeuroData, un analista de inteligencia mediática y narrativa en República Dominicana. "
+            "Analiza solamente evidencia observable. No inventes hechos ni atribuyas intenciones. "
+            "Diferencia sentimiento general de postura hacia el objetivo. No infieras atributos sensibles. "
+            "La relevancia debe medir qué tan directamente trata la evidencia sobre el objetivo del estudio. "
+            "Si la pieza es ajena al objetivo, asigna relevance_score bajo y no fuerces narrativas."
+        )
+        prompt = f"""ESTUDIO: {study.title}
 OBJETIVO ANALIZADO: {study.target}
 PAÍS: {study.country}
 NARRATIVAS DE INTERÉS: {', '.join(study.narratives) or 'descubrirlas'}
 ACTORES DE INTERÉS: {', '.join(study.actors) or 'descubrirlos'}
 PREGUNTAS: {' | '.join(study.questions)}
 FUENTE: {record.get('source_type')} / {record.get('source_name')}
+FECHA: {record.get('published_at')}
 TÍTULO: {title}
 CONTENIDO: {body}
-
-Devuelve este esquema:
-{{
-  "relevance_score": 0.0,
-  "sentiment": "positivo|negativo|neutral|mixto",
-  "stance": "favorable|critico|neutral|incierto",
-  "tone": "informativo|elogio|critica|denuncia|preocupacion|sarcasmo|pregunta|movilizacion|otro",
-  "narratives": [{{"name":"...","score":0.0}}],
-  "actors": ["..."],
-  "claims": [{{"claim":"...","needs_verification":true}}],
-  "emotions": ["..."],
-  "summary": "máximo 2 oraciones",
-  "evidence_terms": ["frases o conceptos breves presentes en la evidencia"]
-}}
 """
-        response = self._client_instance().chat.completions.create(
+        response = self._client_instance().responses.create(
             model=self.model,
-            temperature=0,
-            max_tokens=700,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            instructions=instructions,
+            input=prompt,
+            max_output_tokens=1000,
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "neurodata_narrative_analysis",
+                    "strict": True,
+                    "schema": _ANALYSIS_SCHEMA,
+                }
+            },
         )
-        parsed = self._extract_json(response.choices[0].message.content or "{}")
+        parsed = json.loads(response.output_text or "{}")
         enriched = dict(record)
         enriched["analysis"] = parsed
         enriched["analysis_model"] = self.model
+        enriched["analysis_api"] = "responses"
+        enriched["analysis_version"] = "neurodata-v1.1"
         return enriched
 
     def analyze_many(self, study: StudyConfig, records: List[Dict], limit: int | None = None) -> List[Dict]:
