@@ -8,12 +8,29 @@ from typing import Dict, List
 from .config import StudyConfig
 
 
+DEFAULT_RELEVANCE_THRESHOLD = 0.50
+
+
 def _pct(n: int, total: int) -> str:
     return f"{(n / total * 100):.1f}%" if total else "0.0%"
 
 
-def summarize(records: List[Dict]) -> Dict:
-    analyzed = [r for r in records if isinstance(r.get("analysis"), dict)]
+def _is_relevant(record: Dict, threshold: float = DEFAULT_RELEVANCE_THRESHOLD) -> bool:
+    analysis = record.get("analysis")
+    if not isinstance(analysis, dict):
+        return False
+    score = analysis.get("relevance_score")
+    if score is None:
+        return True
+    try:
+        return float(score) >= threshold
+    except (TypeError, ValueError):
+        return False
+
+
+def summarize(records: List[Dict], relevance_threshold: float = DEFAULT_RELEVANCE_THRESHOLD) -> Dict:
+    analyzed_all = [r for r in records if isinstance(r.get("analysis"), dict)]
+    analyzed = [r for r in analyzed_all if _is_relevant(r, relevance_threshold)]
     sentiment = Counter(r["analysis"].get("sentiment", "unknown") for r in analyzed)
     stance = Counter(r["analysis"].get("stance", "unknown") for r in analyzed)
     narratives = Counter()
@@ -27,7 +44,10 @@ def summarize(records: List[Dict]) -> Dict:
         actors.update(a for a in row["analysis"].get("actors", []) if a)
     return {
         "total_records": len(records),
-        "analyzed_records": len(analyzed),
+        "analyzed_records": len(analyzed_all),
+        "relevant_records": len(analyzed),
+        "excluded_low_relevance": len(analyzed_all) - len(analyzed),
+        "relevance_threshold": relevance_threshold,
         "sentiment": dict(sentiment),
         "stance": dict(stance),
         "narratives": narratives.most_common(20),
@@ -48,8 +68,8 @@ def _table(rows: List[List[str]]) -> str:
 
 def render_executive(study: StudyConfig, records: List[Dict]) -> str:
     s = summarize(records)
-    total = s["analyzed_records"]
-    narratives = [["Narrativa", "Menciones", "% evidencia"]] + [[n, str(c), _pct(c, total)] for n, c in s["narratives"][:5]]
+    total = s["relevant_records"]
+    narratives = [["Narrativa", "Menciones", "% evidencia relevante"]] + [[n, str(c), _pct(c, total)] for n, c in s["narratives"][:5]]
     actors = [["Actor", "Menciones"]] + [[n, str(c)] for n, c in s["actors"][:8]]
     sentiment = [["Sentimiento", "Registros", "%"]] + [[k, str(v), _pct(v, total)] for k, v in sorted(s["sentiment"].items(), key=lambda x: -x[1])]
     questions = "\n".join(f"- {q}" for q in study.questions)
@@ -60,7 +80,9 @@ def render_executive(study: StudyConfig, records: List[Dict]) -> str:
 **País:** {study.country}  
 **Período:** {study.period_start} — {study.period_end}  
 **Registros recolectados:** {s['total_records']}  
-**Registros analizados:** {total}
+**Registros analizados:** {s['analyzed_records']}  
+**Registros relevantes (score ≥ {s['relevance_threshold']:.2f}):** {s['relevant_records']}  
+**Excluidos por baja relevancia:** {s['excluded_low_relevance']}
 
 > Este documento mide conversación pública observable en las fuentes recolectadas. No es una encuesta representativa de toda la población dominicana.
 
@@ -78,7 +100,7 @@ def render_executive(study: StudyConfig, records: List[Dict]) -> str:
 
 ## 4. Fuentes del estudio
 
-{_table([["Tipo de fuente", "Registros"]] + [[k, str(v)] for k, v in s['source_types'].items()])}
+{_table([["Tipo de fuente", "Registros relevantes"]] + [[k, str(v)] for k, v in s['source_types'].items()])}
 
 ## 5. Preguntas que guía NeuroData
 
@@ -102,11 +124,13 @@ def render_premium(study: StudyConfig, records: List[Dict]) -> str:
     executive = render_executive(study, records)
     claims = []
     for row in records:
+        if not _is_relevant(row, s["relevance_threshold"]):
+            continue
         for claim in (row.get("analysis") or {}).get("claims", []):
             if claim.get("claim"):
                 claims.append((claim["claim"], bool(claim.get("needs_verification")), row.get("url")))
     claim_rows = [["Claim detectado", "Verificar", "Fuente"]] + [[c, "Sí" if v else "No", u or ""] for c, v, u in claims[:40]]
-    source_rows = [["Fuente / canal", "Registros"]] + [[n, str(c)] for n, c in s["source_names"]]
+    source_rows = [["Fuente / canal", "Registros relevantes"]] + [[n, str(c)] for n, c in s["source_names"]]
     return executive + f"""
 
 ---
@@ -130,7 +154,7 @@ def render_premium(study: StudyConfig, records: List[Dict]) -> str:
 
 ## 11. Evidencia y metodología
 
-Cada hallazgo debe poder rastrearse al registro fuente conservado en el dataset JSONL del estudio. La clasificación es asistida por IA y debe revisarse antes de publicación comercial cuando implique reputación, cumplimiento, acusaciones o decisiones de alto impacto.
+Cada hallazgo debe poder rastrearse al registro fuente conservado en el dataset JSONL del estudio. Las estadísticas excluyen piezas con `relevance_score` inferior al umbral metodológico. La clasificación es asistida por IA y debe revisarse antes de publicación comercial cuando implique reputación, cumplimiento, acusaciones o decisiones de alto impacto.
 """
 
 
