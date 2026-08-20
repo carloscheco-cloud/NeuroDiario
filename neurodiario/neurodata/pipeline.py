@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 
 from .analyzer import NarrativeAnalyzer
-from .collectors import SerperCollector, YouTubeCollector
+from .collectors import ArticleTextEnricher, SerperCollector, YouTubeCollector
 from .config import StudyConfig
 from .reporting import render_executive, render_premium, summarize, write_report
 from .social_import import import_social_file
@@ -26,6 +26,24 @@ class NeuroDataPipeline:
         if "youtube" in sources:
             records.extend(YouTubeCollector().collect(self.study))
         return merge_records(self.raw_path, records)
+
+    def enrich(self, limit: int | None = None) -> dict:
+        records = read_jsonl(self.raw_path)
+        if not records:
+            return {"total": 0, "attempted": 0, "ok": 0, "failed": 0}
+
+        enricher = ArticleTextEnricher()
+        enriched = enricher.enrich_many(records, limit=limit)
+        write_jsonl(self.raw_path, enriched)
+
+        media = [r for r in enriched if r.get("source_type") == "media_article"]
+        attempted_rows = [r for r in media if r.get("enrichment_status") in {"ok", "failed"}]
+        return {
+            "total": len(media),
+            "attempted": len(attempted_rows),
+            "ok": sum(1 for r in media if r.get("enrichment_status") == "ok"),
+            "failed": sum(1 for r in media if r.get("enrichment_status") == "failed"),
+        }
 
     def import_social(self, path: str, platform: str, source_url: str | None = None) -> int:
         rows = import_social_file(path, self.study.slug, platform, source_url)
