@@ -92,3 +92,41 @@ python -m pytest tests/test_whatsapp.py -q
 Las pruebas usan SQLite y transporte WAHA simulado. Verifican datos compartidos
 con Telegram, permisos, migración, duplicados, dos workers, reinicios de sesión
 de BD, límites y fallos de red. La entrega real se verifica durante la activación.
+
+## Instalación localizada en el VPS de Carlos
+
+`scripts/install_waha_vps.py` está preparado para `/opt/apps/NeuroDiario`,
+servicio `neurodiario` y contenedor `neurodiario_app` sobre el commit VPS
+`313a193e4c783cd16656b2311d42b1cce3c4945c`. No cambia de rama ni sobrescribe
+los cambios locales de generación y requisitos. El payload añade WAHA al
+scheduler de esa versión y conserva su cola de borradores, prioridad de imágenes,
+configuración OpenAI y modelo MediaAsset.
+
+Antes de modificar nada comprueba hashes de los archivos afectados tanto en el
+host como dentro del contenedor activo, y verifica sesión y permiso del canal.
+La clave se reutiliza del contenedor del asistente universitario sin imprimirla;
+si falta, se solicita por entrada oculta.
+
+```bash
+python3 scripts/install_waha_vps.py --check-only
+python3 scripts/install_waha_vps.py
+```
+
+Se puede indicar otro ID mediante `--channel ID@newsletter`. La comprobación
+no envía mensajes. La instalación guarda respaldo e imagen anterior, añade la
+red `universidad_default` al Compose existente y mantiene la clave en un archivo
+0600 fuera del contexto de construcción: `/opt/apps/.NeuroDiario-waha.env`.
+Construye la imagen mientras el contenedor anterior sigue funcionando, prepara
+solo la tabla nueva y reinicia únicamente NeuroDiario. Ante fallo restaura las
+fuentes y etiqueta de imagen anteriores; si el reinicio había comenzado, vuelve
+a levantar la versión previa. La tabla adicional se conserva sin alterar las
+existentes.
+
+El inicio de distribución es el momento de la instalación, en UTC. No publica
+el histórico ni envía una noticia de prueba; hay que comprobar la primera entrega
+real del ciclo. Para pausar, cambiar `WHATSAPP_ENABLED=false` en el archivo de
+configuración anterior y recrear solo el servicio con Docker Compose.
+
+La variante VPS pasó las 24 pruebas de publicación; el instalador tiene otras
+7 pruebas de precondiciones, permisos, recuperación y configuración privada.
+Los chequeos reales de red, sesión y canal se ejecutan en el VPS.
