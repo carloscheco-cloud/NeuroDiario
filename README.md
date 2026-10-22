@@ -525,23 +525,21 @@ Genera imágenes estilo BBC (1200×630px) con Pillow: foto de fondo + overlay os
 ### Telegram
 Publica en canal `@NeuroDiario` vía Bot API. Intenta primero `sendPhoto` con imagen; si falla, usa `sendMessage` con preview. Formato HTML en caption con título en negrita y enlace al artículo.
 
-### WhatsApp Canal
+### WhatsApp Canal — WAHA
 
-Canal oficial: [whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t](https://whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t)
+NeuroDiario puede distribuir las mismas noticias que Telegram al canal de
+WhatsApp desde `scheduler/auto_scheduler.py`. Usa WAHA para enviar el mismo
+**título + imagen + enlace**, sin Make.com, Whapi.Cloud ni generación adicional de IA.
+La configuración externa que documentaban versiones anteriores no está operativa.
 
-La distribución a WhatsApp opera **fuera del código Python**, mediante una automatización en Make.com:
+La integración está desactivada por defecto. Requiere una sesión WAHA `WORKING`,
+un número administrador del canal y conexión de red desde NeuroDiario hasta WAHA.
+Incluye registro por artículo/canal, fecha inicial para evitar publicar el histórico
+y control de reintentos. Un fallo en WhatsApp no obliga a repetir Telegram.
 
-| Componente | Detalle |
-|-----------|---------|
-| Herramienta | Make.com — Scenario "WhatsApp Canal v2" (ID: 5610516) |
-| Frecuencia | Cada 15 minutos |
-| Fuente | RSS de neurodiario.com (`/feed/`, 1 artículo por ciclo) |
-| Extracción imagen | Text Parser Match Pattern extrae `src="([^"]+)"` del campo `<description>` del RSS |
-| Envío | HTTP POST a `https://gate.whapi.cloud/messages/image` |
-| Canal destino | `120363412361118712@newsletter` |
-| Plugin requerido | "Featured Images in RSS" (WordPress) — embebe la imagen en el `<description>` del feed |
+Canal documentado: [NeuroDiario en WhatsApp](https://whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t).
 
-> **Hoja de ruta:** Cuando Meta lance su API oficial para canales de WhatsApp, esta integración migrará directamente hacia ella y se integrará al código Python del repositorio.
+Consulta [configuración y activación de WAHA](docs/WHATSAPP_WAHA.md).
 
 ---
 
@@ -771,3 +769,4 @@ MIT License
 - Agregar type hints completos en los módulos del publisher
 - Implementar retry con backoff exponencial para llamadas a APIs externas
 - Agregar health check endpoint para monitoreo externo
+

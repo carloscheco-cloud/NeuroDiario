@@ -28,9 +28,8 @@ flowchart TD
     P --> R["📱 Telegram<br>sendPhoto + caption"]
     P --> S["📧 Newsletter<br>Mailchimp (domingos)"]
     
-    O --> T["📡 RSS WordPress<br>/feed/ — 30 ítems"]
-    T --> U["⚙️ Make.com<br>cada 15 min<br>Scenario 5610516"]
-    U --> V["💬 WhatsApp Canal<br>Whapi.Cloud<br>@NeuroDiario"]
+    P --> U["WAHA · envío opcional"]
+    U --> V["Canal WhatsApp NeuroDiario"]
 
     style A fill:#e3f2fd
     style F fill:#f3e8fd
@@ -61,4 +60,5 @@ flowchart TD
 | Publicar | Artículo + imagen | WordPress REST API | wordpress_post_id |
 | Facebook | Título + imagen + URL | Pillow compositing + Graph API | facebook_post_id |
 | Telegram | Título + imagen + URL | Bot API sendPhoto | telegram_message_id |
-| WhatsApp | RSS feed actualizado | Make.com → Whapi.Cloud | Mensaje en canal @NeuroDiario |
+| WhatsApp | Mismo título + imagen + URL | WAHA desde social_sync | whatsapp_publications: estado + message_id |
+
