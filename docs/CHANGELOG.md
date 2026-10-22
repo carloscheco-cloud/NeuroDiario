@@ -1,3 +1,10 @@
+## Pendiente de despliegue — WhatsApp con WAHA
+
+- Publicación desde el mismo ciclo de Telegram, con título, imagen y enlace existentes.
+- Tabla independiente de entregas, control de reintentos y bloqueo de reenvíos ambiguos.
+- Activación explícita, fecha inicial y comprobación de sesión/permisos sin publicar.
+- Sin Make.com, Whapi.Cloud ni llamadas adicionales a IA.
+
 # Changelog
 
 ## [Actual] — Julio 2026
@@ -8,7 +15,7 @@
 - Imágenes: priorización de fuentes oficiales, exclusión de medios comerciales
 - Múltiples URLs candidatas para imágenes (fallback en cascada)
 - Newsletter semanal vía Mailchimp con PDF adjunto
-- Integración con WhatsApp Canal vía Make.com (Scenario ID 5610516) + Whapi.Cloud — canal [whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t](https://whatsapp.com/channel/0029VbDCDigJP21BALwA9a1t). Pendiente de migración a API oficial de Meta cuando esté disponible.
+- La documentación anterior describía Make.com/Whapi.Cloud, pero esa configuración no estaba operativa. Se sustituye por un publicador WAHA opcional en el flujo de Telegram.
 
 ### Pipeline Activo
 - Ingesta RSS: cada 20 minutos
@@ -31,3 +38,4 @@
 - Fix del status field: `publish` en WordPress, `published` en BD
 - Implementación de filtro de relevancia para fuentes internacionales
 - Agregación de AS.com fútbol para cobertura del Mundial 2026
+

@@ -37,6 +37,14 @@ class Settings:
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "")
 
+    # ── WhatsApp / WAHA (activación explícita) ─────────────────────────────────
+    WHATSAPP_ENABLED: bool = os.getenv("WHATSAPP_ENABLED", "false").lower() in ("true", "1", "yes")
+    WAHA_URL: str = os.getenv("WAHA_URL", "")
+    WAHA_API_KEY: str = os.getenv("WAHA_API_KEY", "")
+    WAHA_SESSION: str = os.getenv("WAHA_SESSION", "default")
+    WHATSAPP_CHANNEL_ID: str = os.getenv("WHATSAPP_CHANNEL_ID", "")
+    WHATSAPP_START_AT: str = os.getenv("WHATSAPP_START_AT", "")
+
     # ── Imágenes ───────────────────────────────────────────────────────────────
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
     PEXELS_API_KEY: str = os.getenv("PEXELS_API_KEY", "")
@@ -80,3 +88,4 @@ class Settings:
 
 # Instancia única usada en toda la aplicación
 settings = Settings()
+

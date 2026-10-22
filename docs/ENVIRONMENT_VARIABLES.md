@@ -44,3 +44,8 @@
 ## Nota sobre Railway
 
 Railway inyecta `DATABASE_URL` con formato `postgres://`. El código de migración lo convierte a `postgresql://` que SQLAlchemy requiere. El módulo principal `database.py` usa `DATABASE_URL` directamente.
+
+
+## WhatsApp / WAHA
+
+Ver [WHATSAPP_WAHA.md](WHATSAPP_WAHA.md) para `WHATSAPP_ENABLED`, `WAHA_URL`, `WAHA_API_KEY`, `WAHA_SESSION`, `WHATSAPP_CHANNEL_ID` y `WHATSAPP_START_AT`. La integración está desactivada por defecto.

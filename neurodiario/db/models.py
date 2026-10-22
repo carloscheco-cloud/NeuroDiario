@@ -15,6 +15,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -128,3 +129,23 @@ class GeneratedArticle(Base):
 
     def __repr__(self):
         return f"<GeneratedArticle(id={self.id}, status='{self.status}', type='{self.article_type}')>"
+
+
+class WhatsAppPublication(Base):
+    """Una entrega por noticia/canal; no altera las tablas existentes."""
+    __tablename__ = "whatsapp_publications"
+    __table_args__ = (UniqueConstraint("article_id", "channel_id", name="uq_whatsapp_article_channel"),)
+
+    id = Column(Integer, primary_key=True)
+    article_id = Column(Integer, ForeignKey("generated_articles.id"), nullable=False, index=True)
+    channel_id = Column(String(100), nullable=False)
+    status = Column(String(20), nullable=False, default="sending")
+    message_id = Column(String(600), nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    retryable = Column(Boolean, nullable=False, default=False)
+    next_attempt_at = Column(DateTime, nullable=True)
+    error = Column(String(300), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    sent_at = Column(DateTime, nullable=True)
+

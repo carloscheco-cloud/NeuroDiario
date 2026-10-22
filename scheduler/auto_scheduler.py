@@ -8,7 +8,7 @@ Cambios vs versión anterior:
     · Ingesta RSS:  cada 20 min (antes 3)
     · NLP:          cada 20 min (antes 6)
     · Clustering:   3 veces al día (7am, 1pm, 7pm RD) — no cada 8 min
-    · Social sync:  cada 12 min (Facebook + Telegram) — UNO por ciclo (escalonado)
+    · Social sync:  cada 12 min (Facebook + Telegram + WhatsApp/WAHA opcional)
     · Newsletter:   domingos 8am RD
 """
 import logging
@@ -87,14 +87,14 @@ def _get_wordpress_image_url(wp_base: str, auth: tuple, wp_post_id: int):
 
 def _job_social_sync():
     """
-    Distribuye artículos publicados en WordPress a Facebook y Telegram.
+    Distribuye artículos publicados en WordPress a Facebook, Telegram y WAHA.
 
     MODO ESCALONADO: procesa UN solo artículo por ciclo (cada 12 minutos).
     Así, si publicas 25 artículos de golpe en WordPress, se distribuyen
     a redes sociales de uno en uno cada ~12 minutos.
     """
     logger.info("=" * 60)
-    logger.info("JOB: Sincronización WordPress → Facebook + Telegram (escalonado)")
+    logger.info("JOB: Sincronización WordPress → Facebook + Telegram + WhatsApp (escalonado)")
     logger.info("=" * 60)
     try:
         from neurodiario.config.settings import settings
@@ -102,6 +102,9 @@ def _job_social_sync():
         from neurodiario.db.models import GeneratedArticle, Article
         from neurodiario.publisher.facebook_image_generator import post_to_facebook_with_image
         from neurodiario.publisher.telegram_publisher import post_to_telegram
+        from neurodiario.publisher.whatsapp_publisher import get_whatsapp_config
+        from neurodiario.publisher.whatsapp_delivery import needs_whatsapp, publish_record_to_whatsapp
+        from neurodiario.db.models import WhatsAppPublication
         import requests
         from datetime import datetime
 
@@ -109,20 +112,33 @@ def _job_social_sync():
         page_id = getattr(settings, 'FACEBOOK_PAGE_ID', None)
         telegram_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', None)
         telegram_channel = getattr(settings, 'TELEGRAM_CHANNEL_ID', None)
+        whatsapp_config = None
+        try:
+            whatsapp_config = get_whatsapp_config(settings)
+        except ValueError as exc:
+            logger.error("WhatsApp desactivado en este ciclo: %s", exc)
 
         wp_base = settings.WORDPRESS_URL.rstrip('/')
         auth = (settings.WORDPRESS_USER, settings.WORDPRESS_PASSWORD)
 
         with get_db() as db:
+            if whatsapp_config:
+                try:
+                    # Tabla nueva independiente; no ALTER sobre registros existentes.
+                    WhatsAppPublication.__table__.create(bind=db.get_bind(), checkfirst=True)
+                except Exception:
+                    logger.error("WhatsApp: no se pudo preparar el registro de envíos. Ejecuta migrate_whatsapp_publications.py.")
+                    whatsapp_config = None
             pending = db.query(GeneratedArticle).filter(
                 GeneratedArticle.status == "published",
                 GeneratedArticle.wordpress_post_id != None,   # noqa
-            ).all()
+            ).order_by(GeneratedArticle.published_at.asc(), GeneratedArticle.id.asc()).all()
 
             pending = [
                 r for r in pending
                 if (page_token and page_id and r.facebook_post_id is None)
                 or (telegram_token and telegram_channel and r.telegram_message_id is None)
+                or (whatsapp_config and needs_whatsapp(db, r, whatsapp_config))
             ]
 
             if not pending:
@@ -166,6 +182,18 @@ def _job_social_sync():
 
                 image_url = image_candidates[0] if image_candidates else None
                 wordpress_url = wp_post.get("link", f"{wp_base}/?p={record.wordpress_post_id}")
+
+                # Reserva duradera antes de enviar; Telegram y Facebook conservan su propio estado.
+                if whatsapp_config and needs_whatsapp(db, record, whatsapp_config):
+                    try:
+                        wa_result = publish_record_to_whatsapp(
+                            db, record, whatsapp_config, wordpress_url, image_url=image_url,
+                        )
+                        if wa_result:
+                            logger.info("WhatsApp: %s (artículo %s)", wa_result.status, record.id)
+                    except Exception:
+                        db.rollback()
+                        logger.error("WhatsApp: no se pudo completar el registro del envío (artículo %s).", record.id)
 
                 if page_token and page_id and record.facebook_post_id is None:
                     try:
@@ -313,7 +341,7 @@ def start_scheduler() -> BackgroundScheduler:
         trigger="interval",
         minutes=12,
         id="social_sync",
-        name="Sincronización WordPress→Facebook+Telegram (escalonado)",
+        name="Sincronización WordPress→Facebook+Telegram+WhatsApp (escalonado)",
         replace_existing=True,
     )
 
@@ -341,3 +369,4 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
         logger.info("NeuroDiario Scheduler detenido")
+
